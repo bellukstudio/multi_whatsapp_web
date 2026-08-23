@@ -1,0 +1,70 @@
+name: multi_whatsapp_web
+description: >
+  Multi WhatsApp Web — aplikasi cross-platform (Windows, macOS, Linux,
+  Android, iOS) untuk mengelola beberapa sesi WhatsApp Web yang terisolasi.
+  Dibangun mengikuti PRD v1.1 (Clean Architecture + BLoC, domain layer
+  platform-agnostic).
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  flutter_bloc: ^8.1.6
+  equatable: ^2.0.5
+
+  get_it: ^7.7.0
+  injectable: ^2.4.1
+
+  isar_community: ^3.3.2
+  isar_community_flutter_libs: ^3.3.2
+
+  flutter_secure_storage: ^9.2.4 
+
+  webview_windows: ^0.4.0
+
+  # Dipakai HANYA untuk Android/iOS (lihat MobileWebViewSessionHandle).
+  # Sengaja dikunci ke versi stabil TANPA implementasi Linux, supaya
+  # `flutter create --platforms=...,linux` tidak menyertakan
+  # flutter_inappwebview_linux (yang butuh WPE WebKit).
+  flutter_inappwebview: ^6.1.5
+
+  # NOTE on Linux: no embedded-webview dependency here. An earlier pass
+  # tried package:webview_cef, but that package runs ONE global CEF
+  # process with a single shared cookie/localStorage store — two
+  # "accounts" both hitting web.whatsapp.com under that one store look
+  # like the SAME browser tab to WhatsApp Web, which is exactly what
+  # produced the "Gunakan WhatsApp di sini" conflict prompt when testing
+  # 2 accounts. There's no per-instance profile/user-data-dir exposed to
+  # fix that. See linux_webview_adapter.dart: Linux instead launches each
+  # account as a separate system Chromium/Chrome process with its own
+  # --user-data-dir, using only dart:io (no extra package needed) — that
+  # gives genuine, OS-level per-account cookie/localStorage isolation.
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  uuid: ^4.4.2
+  device_info_plus: ^10.1.2
+  package_info_plus: ^8.0.2
+  connectivity_plus: ^7.0.0
+
+  tray_manager: ^0.2.3
+  window_manager: ^0.3.9
+  launch_at_startup: ^0.3.1
+
+  logger: ^2.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+
+  build_runner: ^2.4.11
+  isar_community_generator: ^3.3.2
+  injectable_generator: ^2.6.1
+  mocktail: ^1.0.4
