@@ -68,3 +68,6 @@ dev_dependencies:
   isar_community_generator: ^3.3.2
   injectable_generator: ^2.6.1
   mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
