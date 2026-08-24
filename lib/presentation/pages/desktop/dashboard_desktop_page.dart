@@ -11,7 +11,8 @@ import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
-/// PRD §6.1 desktop layout:
+/// PRD §6.1 desktop layout (connected/disconnected status footer removed
+/// per request — no longer shown):
 /// ┌─────────────────────────────────────────────────────┐
 /// │ Multi WhatsApp Web                         ⚙        │
 /// ├──────────────┬──────────────────────────────────────┤
@@ -20,9 +21,7 @@ import '../shared/settings_page.dart';
 /// │ 🟢 Personal  │                                      │
 /// │ 🟢 Business  │                                      │
 /// │ 🔴 Sales     │                                      │
-/// ├──────────────┴──────────────────────────────────────┤
-/// │ Status: 3 Connected / 1 Disconnected                 │
-/// └─────────────────────────────────────────────────────┘
+/// └──────────────┴──────────────────────────────────────┘
 class DashboardDesktopPage extends StatelessWidget {
   const DashboardDesktopPage({super.key});
 
@@ -98,20 +97,6 @@ class DashboardDesktopPage extends StatelessWidget {
                           ),
                         ),
                       ],
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Status: ${accountState.connectedCount} Connected / '
-                        '${accountState.disconnectedCount} Disconnected',
-                      ),
                     ),
                   ),
                 ],

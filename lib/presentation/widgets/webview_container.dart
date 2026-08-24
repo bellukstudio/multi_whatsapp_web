@@ -132,6 +132,22 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface> {
   final _boxKey = GlobalKey();
   Timer? _geometryTimer;
 
+  // FIX (typing-lag bug): the previous version called setGeometry() on
+  // EVERY timer tick unconditionally, even when nothing on screen had
+  // moved. Each call round-tripped through the MethodChannel and forced
+  // GTK to run gtk_fixed_move()/gtk_widget_set_size_request() on the
+  // WebKitWebView, which forces WebKitGTK to re-run layout on its whole
+  // page — including the contenteditable message box. Doing that 10x a
+  // second while the user is actively typing is exactly what produced
+  // the "lag saat mengetik" symptom, since every keystroke's own reflow
+  // was racing against a redundant native relayout the geometry hadn't
+  // actually asked for. We now only touch native when the rect actually
+  // changed (past a sub-pixel epsilon), which makes this a no-op the
+  // vast majority of the time (i.e. whenever the layout is stable —
+  // which is precisely when the user is typing).
+  Rect? _lastSyncedRect;
+  static const double _epsilon = 0.5;
+
   @override
   void initState() {
     super.initState();
@@ -139,12 +155,13 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface> {
       viewId: widget.handle.accountId,
       visible: true,
     );
-    // Periodic polling rather than trying to hook every individual
-    // Flutter relayout trigger (window resize, sidebar drag, etc.) — simpler
-    // and more robust, at the cost of up to ~100ms lag on the native view
-    // catching up to a resize. Tune the interval down if that's visible.
+    // Polling still catches window resizes / sidebar drags without having
+    // to hook every individual Flutter relayout trigger, but the interval
+    // can be relaxed (200ms is still visually seamless for a resize drag)
+    // now that idle ticks are cheap no-ops instead of forced native
+    // relayouts.
     _geometryTimer = Timer.periodic(
-      const Duration(milliseconds: 100),
+      const Duration(milliseconds: 200),
       (_) => _syncGeometry(),
     );
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
@@ -156,6 +173,20 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface> {
     if (renderObject is! RenderBox || !renderObject.attached) return;
     final offset = renderObject.localToGlobal(Offset.zero);
     final size = renderObject.size;
+    final rect = offset & size;
+
+    final last = _lastSyncedRect;
+    if (last != null &&
+        (rect.left - last.left).abs() < _epsilon &&
+        (rect.top - last.top).abs() < _epsilon &&
+        (rect.width - last.width).abs() < _epsilon &&
+        (rect.height - last.height).abs() < _epsilon) {
+      // Nothing meaningfully moved since the last sync — skip the native
+      // call entirely instead of re-issuing an identical geometry update.
+      return;
+    }
+    _lastSyncedRect = rect;
+
     // NOTE (unverified — no Flutter/GTK build available to test this
     // against): assumes Flutter's logical-pixel coordinate space maps
     // 1:1 onto the GTK widget-relative pixel space `gtk_fixed_move`
@@ -185,7 +216,19 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface> {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox.expand(key: _boxKey);
+    // NotificationListener catches size changes (window resize, sidebar
+    // drag) the instant layout happens, instead of waiting for the next
+    // timer tick — keeps a resize feeling responsive even though the
+    // fallback timer above was slowed down.
+    return NotificationListener<SizeChangedLayoutNotification>(
+      onNotification: (_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
+        return true;
+      },
+      child: SizeChangedLayoutNotifier(
+        child: SizedBox.expand(key: _boxKey),
+      ),
+    );
   }
 }
 

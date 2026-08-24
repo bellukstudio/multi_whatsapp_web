@@ -25,9 +25,6 @@ class AccountDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final connected =
-        accounts.where((a) => a.status == AccountConnectionStatus.connected).length;
-
     return Drawer(
       child: SafeArea(
         child: Column(
@@ -57,10 +54,6 @@ class AccountDrawer extends StatelessWidget {
               ),
             ),
             const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('$connected Connected / ${accounts.length - connected} Disconnected'),
-            ),
             ListTile(
               leading: AppConstants.settingsIcon(),
               title: const Text('Settings'),

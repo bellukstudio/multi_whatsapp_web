@@ -74,6 +74,19 @@ class AndroidWebViewAdapter implements WebViewAdapter {
       // dataDirectorySuffix: accountId,
       // Also keep it out of any shared/external location per §25.
       allowFileAccess: false,
+      // Perf/lightweight tuning: explicit (matches the plugin default,
+      // but pinned here so it can't silently change on a package
+      // upgrade) — Hybrid Composition is what lets the soft keyboard and
+      // text-input events sync correctly with the embedded WebView; with
+      // it off, typing into a WebView text field is a well-known source
+      // of visible input lag on Android.
+      useHybridComposition: true,
+      cacheEnabled: true,
+      disableDefaultErrorPage: true,
+      // WhatsApp Web doesn't need autoplaying media; keeping this gated
+      // avoids background audio/video decode work competing with the UI
+      // thread for CPU.
+      mediaPlaybackRequiresUserGesture: true,
     );
     return MobileWebViewSessionHandle(accountId: accountId, settings: settings);
   }

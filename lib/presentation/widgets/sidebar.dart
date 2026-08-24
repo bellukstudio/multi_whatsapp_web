@@ -77,7 +77,7 @@ class Sidebar extends StatelessWidget {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      StatusBadge(status: account.status),
+                      // StatusBadge(status: account.status),
                       PopupMenuButton<String>(
                         tooltip: 'Account actions',
                         onSelected: (value) {

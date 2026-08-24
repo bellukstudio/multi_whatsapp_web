@@ -81,6 +81,10 @@ class IOSWebViewAdapter implements WebViewAdapter {
       // package version during PoC #5 (§3) and wire the accountId-derived
       // identifier here.
       allowFileAccess: false,
+      // Perf/lightweight tuning, same rationale as AndroidWebViewAdapter.
+      cacheEnabled: true,
+      disableDefaultErrorPage: true,
+      mediaPlaybackRequiresUserGesture: true,
     );
     return MobileWebViewSessionHandle(accountId: accountId, settings: settings);
   }
