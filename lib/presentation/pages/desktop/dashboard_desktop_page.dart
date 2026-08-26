@@ -11,37 +11,35 @@ import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
-/// PRD §6.1 desktop layout (connected/disconnected status footer removed
-/// per request — no longer shown):
-/// ┌─────────────────────────────────────────────────────┐
-/// │ Multi WhatsApp Web                         ⚙        │
-/// ├──────────────┬──────────────────────────────────────┤
-/// │ Accounts     │            WhatsApp Web              │
-/// │ + Add        │                                      │
-/// │ 🟢 Personal  │                                      │
-/// │ 🟢 Business  │                                      │
-/// │ 🔴 Sales     │                                      │
-/// └──────────────┴──────────────────────────────────────┘
+/// PRD §6.1 desktop layout — REDESIGNED to a modern, minimal icon rail
+/// (see [Sidebar]) with no top AppBar at all; the active account's name
+/// now surfaces in a slim inline header above the WebView itself, so the
+/// WebView gets nearly the full window instead of losing width to a wide
+/// always-expanded sidebar *and* height to a Material AppBar.
+///
+/// ┌────┬──────────────────────────────────┐
+/// │ +  │  Personal                    ⟳    │
+/// │ 🟢A├──────────────────────────────────┤
+/// │ 🟢B│                                   │
+/// │ 🔴C│           WhatsApp Web           │
+/// │    │                                   │
+/// │ ⚙  │                                   │
+/// └────┴──────────────────────────────────┘
+///
+/// IMPORTANT (bug fix): every navigation triggered from here — Settings,
+/// Add Account, rename/delete dialogs — now goes through
+/// [showOverlaySafely]. The native WebKitGTK/webview_windows surface is
+/// composited *above* Flutter's own widget tree, so a bare
+/// `Navigator.push` never actually hides it — the new page/dialog would
+/// render underneath the still-visible WebView and look "cut off".
+/// Previously only the account rename/delete flow did this; Settings and
+/// Add Account did not, which was the reported bug.
 class DashboardDesktopPage extends StatelessWidget {
   const DashboardDesktopPage({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(AppConstants.appName),
-        actions: [
-          IconButton(
-            icon: AppConstants.settingsIcon(),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) =>
-                    const SettingsPage(formFactor: FormFactor.desktop),
-              ),
-            ),
-          ),
-        ],
-      ),
       body: BlocBuilder<AccountBloc, AccountState>(
         builder: (context, accountState) {
           return BlocBuilder<SessionCubit, SessionState>(
@@ -53,43 +51,55 @@ class DashboardDesktopPage extends StatelessWidget {
                   ? null
                   : activeMatches.first;
 
-              return Column(
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Sidebar(
+                    accounts: accountState.accounts,
+                    activeAccountId: sessionState.activeAccountId,
+                    activeSession: sessionState.handle,
+                    onSelect: (a) => context.read<SessionCubit>().switchTo(a),
+                    onAdd: () => showOverlaySafely(
+                      sessionState.handle,
+                      () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const AddAccountPage(),
+                        ),
+                      ),
+                    ),
+                    onOpenSettings: () => showOverlaySafely(
+                      sessionState.handle,
+                      () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              const SettingsPage(formFactor: FormFactor.desktop),
+                        ),
+                      ),
+                    ),
+                    onRename: (a) => showOverlaySafely(
+                      sessionState.handle,
+                      () => _showRenameDialog(context, a.id, a.name),
+                    ),
+                    // onLogout: (a) {
+                    //   context.read<SessionCubit>().releaseAccount(a.id);
+                    //   context.read<AccountBloc>().add(
+                    //     AccountLoggedOut(a.id),
+                    //   );
+                    // },
+                    onDelete: (a) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        showOverlaySafely(
+                          sessionState.handle,
+                          () => _confirmDeleteAccount(context, a),
+                        );
+                      });
+                    },
+                  ),
                   Expanded(
-                    child: Row(
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Sidebar(
-                          accounts: accountState.accounts,
-                          activeAccountId: sessionState.activeAccountId,
-                          activeSession: sessionState.handle,
-                          onSelect: (a) =>
-                              context.read<SessionCubit>().switchTo(a),
-                          onAdd: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const AddAccountPage(),
-                            ),
-                          ),
-                          onRename: (a) => showOverlaySafely(
-                            sessionState.handle,
-                            () => _showRenameDialog(context, a.id, a.name),
-                          ),
-                          // onLogout: (a) {
-                          //   context.read<SessionCubit>().releaseAccount(a.id);
-                          //   context.read<AccountBloc>().add(
-                          //     AccountLoggedOut(a.id),
-                          //   );
-                          // },
-                          onDelete: (a) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              showOverlaySafely(
-                                sessionState.handle,
-                                () => _confirmDeleteAccount(context, a),
-                              );
-                            });
-                          },
-                        ),
-                        const VerticalDivider(width: 1),
+                        _ActiveAccountHeader(account: activeAccount),
                         Expanded(
                           child: WebViewContainer(
                             account: activeAccount,
@@ -108,9 +118,6 @@ class DashboardDesktopPage extends StatelessWidget {
     );
   }
 
-  /// Diubah jadi `return showDialog(...)` (sebelumnya dipanggil tanpa
-  /// return) — showOverlaySafely butuh Future ini supaya tahu kapan
-  /// dialog benar-benar tertutup sebelum memanggil resumeRendering().
   Future<void> _showRenameDialog(
     BuildContext context,
     String id,
@@ -166,6 +173,47 @@ class DashboardDesktopPage extends StatelessWidget {
               context.read<AccountBloc>().add(AccountDeleted(account.id));
             },
             child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Slim inline header above the WebView — replaces the old full-width
+/// Material AppBar. Just the active account's name (so you always know
+/// which session you're looking at) plus a reload affordance; everything
+/// else (adding accounts, settings) now lives in the rail instead of
+/// competing for space up here.
+class _ActiveAccountHeader extends StatelessWidget {
+  const _ActiveAccountHeader({required this.account});
+
+  final Account? account;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              account?.name ?? AppConstants.appName,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),

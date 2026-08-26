@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:webview_windows/webview_windows.dart' as win;
 
+import '../../app.dart' show desktopWebViewRouteObserver;
 import '../../data/datasources/webview/desktop/linux_webview_adapter.dart';
 import '../../data/datasources/webview/desktop/linux_webkit_platform_view.dart';
 import '../../data/datasources/webview/desktop/windows_webview_adapter.dart';
@@ -128,9 +129,21 @@ class _LinuxEngineSurface extends StatefulWidget {
   State<_LinuxEngineSurface> createState() => _LinuxEngineSurfaceState();
 }
 
-class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface> {
+class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
+    with RouteAware {
   final _boxKey = GlobalKey();
   Timer? _geometryTimer;
+
+  // FIX (native view bleeding through Flutter dialogs/pages): previously
+  // the ONLY things that ever called setVisible() were initState()/
+  // dispose() (this widget mounting/unmounting) plus whichever call site
+  // happened to remember to wrap its navigation in `showOverlaySafely`.
+  // Both turned out to be unreliable — Settings and Add Account both hid
+  // this behind them at different points in testing. RouteAware fixes
+  // this structurally: `didPushNext()`/`didPopNext()` fire automatically
+  // for ANY route pushed/popped on top of this one, regardless of which
+  // screen did the navigating, so there's no call site left to forget.
+  ModalRoute<void>? _subscribedRoute;
 
   // FIX (typing-lag bug): the previous version called setGeometry() on
   // EVERY timer tick unconditionally, even when nothing on screen had
@@ -164,6 +177,77 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface> {
       const Duration(milliseconds: 200),
       (_) => _syncGeometry(),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Subscribe to whichever route currently hosts this widget. Re-runs
+    // safely if the route identity ever changes (it normally won't for
+    // this widget, but didChangeDependencies can fire more than once).
+    final route = ModalRoute.of(context);
+    if (route != _subscribedRoute) {
+      if (_subscribedRoute != null) {
+        desktopWebViewRouteObserver.unsubscribe(this);
+      }
+      _subscribedRoute = route;
+      if (route != null) {
+        desktopWebViewRouteObserver.subscribe(this, route);
+      }
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _LinuxEngineSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // FIX (stale account left visible after switching): this State object
+    // can be reused for a *different* `handle` (e.g. switching accounts
+    // just changes which account is active — same widget slot, same
+    // State, only `widget.handle` changes) rather than being disposed and
+    // recreated. Previously only initState()/dispose() (mount/unmount)
+    // touched native visibility, so the OLD account's native WebView was
+    // never told to hide when this happened, and the new account's rect
+    // gets synced onto whatever was left visible underneath. Explicitly
+    // re-asserting both sides here keeps native state honest regardless
+    // of whether Flutter reused or recreated this State.
+    if (oldWidget.handle.accountId != widget.handle.accountId) {
+      LinuxWebKitPlatformView.setVisible(
+        viewId: oldWidget.handle.accountId,
+        visible: false,
+      );
+      _lastSyncedRect = null; // force a fresh geometry sync for the new view
+      if (_subscribedRoute?.isCurrent ?? true) {
+        LinuxWebKitPlatformView.setVisible(
+          viewId: widget.handle.accountId,
+          visible: true,
+        );
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
+    }
+  }
+
+  // RouteAware: another route was just pushed on top of ours — hide the
+  // native view so it can't paint over the new page/dialog.
+  @override
+  void didPushNext() {
+    LinuxWebKitPlatformView.setVisible(
+      viewId: widget.handle.accountId,
+      visible: false,
+    );
+  }
+
+  // RouteAware: the route that was covering ours just got popped — show
+  // the native view again and force a fresh geometry sync, since its
+  // last-known rect may be stale after whatever layout changes happened
+  // while it was hidden.
+  @override
+  void didPopNext() {
+    LinuxWebKitPlatformView.setVisible(
+      viewId: widget.handle.accountId,
+      visible: true,
+    );
+    _lastSyncedRect = null;
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
   }
 
@@ -207,6 +291,9 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface> {
   @override
   void dispose() {
     _geometryTimer?.cancel();
+    if (_subscribedRoute != null) {
+      desktopWebViewRouteObserver.unsubscribe(this);
+    }
     LinuxWebKitPlatformView.setVisible(
       viewId: widget.handle.accountId,
       visible: false,

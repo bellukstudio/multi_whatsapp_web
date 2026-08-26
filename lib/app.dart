@@ -16,6 +16,27 @@ import 'presentation/bloc/session/session_cubit.dart';
 import 'presentation/bloc/theme/theme_cubit.dart';
 import 'presentation/responsive/responsive_layout.dart';
 
+/// FIX (native WebView bleeding through Flutter dialogs/pages): the
+/// desktop native WebView surfaces (WebKitGTK on Linux, and similarly
+/// webview_windows on Windows) are composited ABOVE the entire Flutter
+/// `FlView` — a plain `Navigator.push`/`showDialog` never actually
+/// covers them, because Flutter has no idea a separate native widget
+/// exists on top of it at all. The previous fix for this
+/// (`showOverlaySafely`, calling pauseRendering()/resumeRendering()
+/// imperatively at each navigation call site) turned out to be too easy
+/// to miss or get wrong — Settings and Add Account both slipped through
+/// at different points.
+///
+/// This `RouteObserver` is the structural fix: any widget that mixes in
+/// `RouteAware` and subscribes to it (see `_LinuxEngineSurfaceState` in
+/// `webview_container.dart`) automatically gets `didPushNext()` /
+/// `didPopNext()` callbacks whenever ANY route is pushed/popped on top
+/// of its own route — no matter which screen does the navigating, and
+/// with no risk of a call site forgetting to wrap itself. The native
+/// view hides/shows itself; nothing else needs to remember to ask it to.
+final RouteObserver<ModalRoute<void>> desktopWebViewRouteObserver =
+    RouteObserver<ModalRoute<void>>();
+
 class MultiWhatsAppWebApp extends StatelessWidget {
   const MultiWhatsAppWebApp({super.key, required this.formFactor});
 
@@ -60,6 +81,7 @@ class MultiWhatsAppWebApp extends StatelessWidget {
               AppThemeMode.dark => ThemeMode.dark,
               AppThemeMode.system => ThemeMode.system,
             },
+            navigatorObservers: [desktopWebViewRouteObserver],
             home: const ResponsiveLayout(),
           );
         },

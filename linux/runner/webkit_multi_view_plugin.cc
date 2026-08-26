@@ -87,24 +87,84 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
   WebKitWebContext* web_context =
       webkit_web_context_new_with_website_data_manager(data_manager);
 
+  // FINAL: disabled. Confirmed by testing on this machine — sandbox
+  // enabled (TRUE) breaks outbound networking here both at initial load
+  // ("Network is unreachable") and later at message-send time (Enter
+  // silently not sending, almost certainly the WhatsApp Web WebSocket
+  // failing under the same broken sandbox networking). Sandbox disabled
+  // (FALSE) loads and sends normally. The earlier GObject
+  // `invalid (NULL) pointer instance` / freeze-after-send issue this
+  // was toggled to help isolate turned out to be a separate, unrelated
+  // problem — missing GStreamer audio plugins (autoaudiosink) on the
+  // system, now fixed at the OS level — so there's no remaining reason
+  // to keep the sandbox on for this machine. Does not affect the
+  // per-account cookie/storage isolation above, which is a completely
+  // separate mechanism (WebKitWebsiteDataManager).
+  webkit_web_context_set_sandbox_enabled(web_context, FALSE);
+
   GtkWidget* webview = webkit_web_view_new_with_context(web_context);
+
+  // IMPORTANT: settings — especially hardware_acceleration_policy — are
+  // configured here, BEFORE gtk_widget_show()/gtk_fixed_put() realize
+  // this widget. Realizing it is what makes WebKitGTK actually spawn
+  // the WebProcess and set up its compositor; configuring settings
+  // afterward let the WebProcess start under the OLD policy and then
+  // get reconfigured mid-init, which left it in an inconsistent
+  // internal state — that mismatch is the likely cause of the
+  // `GLib-GObject-CRITICAL: invalid (NULL) pointer instance` /
+  // `g_signal_connect_data` crash seen in WebKitWebProcess. Doing this
+  // before realize means the WebProcess is spawned with the final
+  // policy from the start, no reconfiguration involved.
+  //
+  // Perf/stability history on hardware_acceleration_policy (kept here
+  // so the next person doesn't re-try the same two things):
+  //  - ALWAYS: forces GPU compositing inside a plain Cairo-composited
+  //    GtkOverlay (see my_application.cc) — causes an expensive
+  //    GPU->CPU readback on every repaint, most visible right after
+  //    sending a message (chat list updates + auto-scrolls).
+  //  - ON_DEMAND: lets WebKitGTK create/tear down its OWN EGL context
+  //    dynamically mid-session — that new context contends with the
+  //    Flutter Linux embedder's own EGL/GLES context in the same
+  //    process and crashed the whole app (`eglMakeCurrent failed` ->
+  //    `FlutterEngineRemoveView` -> lost connection to device).
+  //  - ON_DEMAND (current): re-tried after fixing the settings-before-
+  //    show() ordering bug above. NEVER (previously used to work around
+  //    the eglMakeCurrent crash) turned out to also disable GPU
+  //    acceleration for WhatsApp Web's OWN client-side canvas-based
+  //    image compression step that runs before every attachment upload
+  //    — which is why sending images/documents got very slow even for
+  //    small files. Since the ordering bug (not the ON_DEMAND value
+  //    itself) is believed to have been the real cause of the earlier
+  //    crash, ON_DEMAND is worth retesting now that settings are
+  //    applied before realize.
+  WebKitSettings* webkit_settings = webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview));
+  webkit_settings_set_hardware_acceleration_policy(
+      webkit_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND);
+  webkit_settings_set_enable_smooth_scrolling(webkit_settings, TRUE);
+  webkit_settings_set_enable_page_cache(webkit_settings, TRUE);
+  // DIAGNOSTIC (temporary — turn back to FALSE once done): enabled so
+  // the user can right-click the WhatsApp Web view -> "Inspect Element"
+  // and use Web Inspector's Network/Console tabs to see exactly what's
+  // taking ~5s after clicking send on an attachment (small files too,
+  // so it's not upload bandwidth). Nothing in the Dart/native code here
+  // has any 5s delay, so the cause is inside WhatsApp Web's own JS or a
+  // network round-trip — Web Inspector is the only way to actually see
+  // which request/script is responsible instead of guessing further.
+  webkit_settings_set_enable_developer_extras(webkit_settings, TRUE);
+  webkit_settings_set_enable_write_console_messages_to_stdout(webkit_settings, FALSE);
+  // NOTE (reverted — do not re-add): a Chrome-spoofed User-Agent was
+  // tried here to stop WhatsApp Web's UA sniffing from reporting
+  // "Safari", but that caused WA Web's JS to assume genuine
+  // Chromium/V8-only capabilities that this engine
+  // (WebKitGTK/JavaScriptCore) doesn't actually have, which froze the
+  // WA Web content permanently once it hit a Chrome-only code path.
+  // WhatsApp Web officially supports Safari, and the default WebKitGTK
+  // UA genuinely matches the engine underneath it (real WebKit), so
+  // leaving the UA at its default is correct here.
+
   gtk_widget_set_size_request(webview, 1, 1);
   gtk_fixed_put(self->container, webview, 0, 0);
   gtk_widget_show(webview);
-
-  // Perf tuning ("ringan"): WebKitGTK falls back to a much slower
-  // software compositing/paint path unless hardware acceleration is
-  // explicitly forced on, which is a well-known cause of janky typing
-  // and scrolling in contenteditable-heavy pages like WhatsApp Web's
-  // message box. Developer/debug extras and console-to-stdout logging
-  // are also disabled since this is a production embed, not a browser.
-  WebKitSettings* webkit_settings = webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview));
-  webkit_settings_set_hardware_acceleration_policy(
-      webkit_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS);
-  webkit_settings_set_enable_smooth_scrolling(webkit_settings, TRUE);
-  webkit_settings_set_enable_page_cache(webkit_settings, TRUE);
-  webkit_settings_set_enable_developer_extras(webkit_settings, FALSE);
-  webkit_settings_set_enable_write_console_messages_to_stdout(webkit_settings, FALSE);
 
   webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview), url.c_str());
 
