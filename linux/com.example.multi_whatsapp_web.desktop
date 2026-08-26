@@ -1,0 +1,10 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Name=Multi WhatsApp Web
+Comment=Run multiple WhatsApp Web accounts side by side
+Exec=multi_whatsapp_web
+Icon=com.example.multi_whatsapp_web
+Categories=Network;InstantMessaging;
+Terminal=false
+StartupWMClass=com.example.multi_whatsapp_web

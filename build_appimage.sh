@@ -26,6 +26,20 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/i
 cp -r "$BUNDLE_DIR"/* "$APPDIR/usr/bin/"
 
 # .desktop file — required by AppImage.
+#
+# FIX (taskbar/dock icon stuck on a generic fallback even though the
+# app launcher/grid icon is correct): StartupWMClass is what lets
+# GNOME Shell (and other WM_CLASS-matching taskbars/docks) correlate
+# the ACTUALLY RUNNING window back to this .desktop entry to look up
+# its icon — separate from, and in addition to, the app grid/launcher
+# icon lookup, which reads the .desktop file directly and was already
+# working. Without it, matching falls back to weaker heuristics that
+# can fail (e.g. when launched from inside a mounted AppImage, or via
+# AppImageLauncher's renamed/hashed integrated .desktop file), leaving
+# the taskbar/dock showing GTK's generic default icon. This value must
+# match the "application-id" my_application.cc registers the GApplication
+# under (see APPLICATION_ID / g_set_prgname in that file) — that's what
+# GTK actually reports as the window's app ID on both X11 and Wayland.
 cat > "$APPDIR/usr/share/applications/${APP_ID}.desktop" << EOF
 [Desktop Entry]
 Type=Application
@@ -34,6 +48,7 @@ Exec=${APP_NAME}
 Icon=${APP_ID}
 Categories=Network;InstantMessaging;
 Terminal=false
+StartupWMClass=${APP_ID}
 EOF
 cp "$APPDIR/usr/share/applications/${APP_ID}.desktop" "$APPDIR/"
 

@@ -77,6 +77,22 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
+# App icon for the running window (title bar/taskbar/dock) — see
+# set_window_icon() in runner/my_application.cc, which looks for this at
+# <exe_dir>/data/icon.png. Sourced from linux/appimage/icon.png so the
+# AppImage launcher icon and the running-window icon are always the same
+# file; only warns (doesn't fail the build) if it's missing, matching how
+# the AppImage script itself falls back to a placeholder.
+if(EXISTS "${CMAKE_SOURCE_DIR}/appimage/icon.png")
+  install(FILES "${CMAKE_SOURCE_DIR}/appimage/icon.png"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
+    COMPONENT Runtime)
+else()
+  message(WARNING "linux/appimage/icon.png not found — the built app "
+    "will fall back to GTK's generic default window icon. Add a "
+    "256x256 PNG there and rebuild to fix this.")
+endif()
+
 foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
   install(FILES "${bundled_library}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"

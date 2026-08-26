@@ -15,11 +15,38 @@ struct _MyApplication {
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+// FIX (window/taskbar icon never changes): nothing in this file ever
+// called gtk_window_set_icon*() — the AppImage's icon.png only affects
+// the .desktop launcher entry (app grid / file manager), completely
+// separate from what GTK shows for the actual RUNNING window (title
+// bar, taskbar/dock, Alt-Tab), which was falling back to a generic
+// default. This resolves the icon relative to the running executable's
+// own location (via /proc/self/exe) rather than a hardcoded install
+// path, so it works the same way whether launched via `flutter run`,
+// the raw `build/linux/x64/*/bundle` binary, or from inside an
+// AppImage's temporary mount — see the matching CMakeLists.txt change
+// that installs icon.png into the bundle's `data/` directory right
+// next to where this looks for it.
+static void set_window_icon(GtkWindow* window) {
+  g_autofree gchar* exe_path = g_file_read_link("/proc/self/exe", nullptr);
+  if (exe_path == nullptr) return;
+  g_autofree gchar* exe_dir = g_path_get_dirname(exe_path);
+  g_autofree gchar* icon_path =
+      g_build_filename(exe_dir, "data", "icon.png", nullptr);
+
+  g_autoptr(GError) error = nullptr;
+  if (!gtk_window_set_icon_from_file(window, icon_path, &error)) {
+    g_warning("Could not load app icon from %s: %s", icon_path,
+              error ? error->message : "unknown error");
+  }
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+  set_window_icon(window);
 
   gboolean use_header_bar = TRUE;
 #ifdef GDK_WINDOWING_X11
