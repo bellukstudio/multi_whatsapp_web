@@ -61,9 +61,9 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
+  flutter_launcher_icons: ^0.14.4
   flutter_lints: ^5.0.0
-
+  change_app_package_name: ^1.5.0
   build_runner: ^2.4.11
   isar_community_generator: ^3.3.2
   injectable_generator: ^2.6.1
@@ -71,3 +71,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/

@@ -5,28 +5,24 @@ import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/webview_safe_overlay.dart';
 import '../../bloc/account/account_bloc.dart';
 import '../../bloc/session/session_cubit.dart';
-import '../../widgets/account_drawer.dart';
 import '../../widgets/account_switcher_bottom.dart';
 import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
-/// PRD §6.2 mobile layout:
-/// ┌───────────────────────────┐
-/// │ ☰  Personal          ⚙   │
-/// ├───────────────────────────┤
-/// │                            │
-/// │      WhatsApp Web          │
-/// │      (active account)      │
-/// │                            │
-/// ├───────────────────────────┤
-/// │ 🟢 P  🟢 B  🔴 S  ＋       │
-/// └───────────────────────────┘
+/// PRD §6.2 mobile layout — REDESIGNED to mirror the desktop rail concept
+/// instead of AppBar + Drawer + bottom strip. The Drawer is gone: it was
+/// a redundant second copy of the account list once the bottom strip
+/// carries every account plus Add/Settings, and desktop only has one
+/// switcher surface too. The old top `AppBar` is replaced with a slim
+/// 48dp header — same shape as desktop's `_ActiveAccountHeader` — so the
+/// two form factors read as the same app rather than two different apps.
 ///
-/// Wraps a [WidgetsBindingObserver] to implement PRD §11/§14a lifecycle
-/// handling: on resume, tell [SessionCubit] to reload from persisted
-/// storage rather than assume the WebView survived backgrounding; on
-/// pause, optionally proactively unload it (§27).
+/// Also fixes the same bug desktop had: Settings/Add Account here were
+/// still doing a bare `Navigator.push`, which never hides the native
+/// WebView overlay (it composites above Flutter's tree), so the pushed
+/// page rendered underneath it. Every navigation now goes through
+/// [showOverlaySafely], matching desktop and the existing dialog flows.
 class DashboardMobilePage extends StatefulWidget {
   const DashboardMobilePage({super.key});
 
@@ -60,10 +56,8 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
     final activeAccount = matches.first;
 
     if (state == AppLifecycleState.resumed) {
-      // PRD §11: don't assume in-memory continuity.
       sessionCubit.handleAppResumed(activeAccount);
     } else if (state == AppLifecycleState.paused) {
-      // PRD §27: proactive unload (mandatory strategy on mobile).
       sessionCubit.handleAppBackgrounded();
     }
   }
@@ -74,48 +68,54 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
       builder: (context, accountState) {
         return BlocBuilder<SessionCubit, SessionState>(
           builder: (context, sessionState) {
-            final activeMatches = accountState.accounts
-                .where((a) => a.id == sessionState.activeAccountId);
-            final activeAccount = activeMatches.isEmpty ? null : activeMatches.first;
+            final activeMatches = accountState.accounts.where(
+              (a) => a.id == sessionState.activeAccountId,
+            );
+            final activeAccount = activeMatches.isEmpty
+                ? null
+                : activeMatches.first;
 
             return Scaffold(
-              appBar: AppBar(
-                title: Text(activeAccount?.name ?? AppConstants.appName),
-                actions: [
-                  IconButton(
-                    icon: AppConstants.settingsIcon(),
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            const SettingsPage(formFactor: FormFactor.mobile),
+              body: SafeArea(
+                child: Column(
+                  children: [
+                    _MobileActiveAccountHeader(
+                      account: activeAccount,
+                      onOpenSettings: () => showOverlaySafely(
+                        sessionState.handle,
+                        () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SettingsPage(
+                              formFactor: FormFactor.mobile,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              drawer: AccountDrawer(
-                accounts: accountState.accounts,
-                activeAccountId: sessionState.activeAccountId,
-                onSelect: (a) => context.read<SessionCubit>().switchTo(a),
-                onLongPress: (a) => _showAccountActions(context, a.id, a.name),
-                onSettings: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const SettingsPage(formFactor: FormFactor.mobile),
+                    Expanded(
+                      child: WebViewContainer(
+                        account: activeAccount,
+                        sessionState: sessionState,
+                      ),
                     ),
-                  );
-                },
-              ),
-              body: WebViewContainer(account: activeAccount, sessionState: sessionState),
-              bottomNavigationBar: AccountSwitcherBottom(
-                accounts: accountState.accounts,
-                activeAccountId: sessionState.activeAccountId,
-                onSelect: (a) => context.read<SessionCubit>().switchTo(a),
-                onAdd: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const AddAccountPage()),
+                    AccountSwitcherBottom(
+                      accounts: accountState.accounts,
+                      activeAccountId: sessionState.activeAccountId,
+                      activeSession: sessionState.handle,
+                      onSelect: (a) => context.read<SessionCubit>().switchTo(a),
+                      onAdd: () => showOverlaySafely(
+                        sessionState.handle,
+                        () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const AddAccountPage(),
+                          ),
+                        ),
+                      ),
+                      onContextMenu: (a) =>
+                          _showAccountActions(context, a.id, a.name),
+                    ),
+                  ],
                 ),
-                onLongPress: (a) => _showAccountActions(context, a.id, a.name),
               ),
             );
           },
@@ -124,8 +124,14 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
     );
   }
 
-  Future<void> _showAccountActions(BuildContext context, String id, String name) async {
+  Future<void> _showAccountActions(
+    BuildContext context,
+    String id,
+    String name,
+  ) async {
     final activeSession = context.read<SessionCubit>().state.handle;
+    final isActive = context.read<SessionCubit>().state.activeAccountId == id;
+
     await showOverlaySafely(activeSession, () async {
       await showModalBottomSheet(
         context: context,
@@ -134,6 +140,13 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
         builder: (sheetContext) => SafeArea(
           child: Wrap(
             children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Text(
+                  name,
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+              ),
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
                 title: const Text('Rename'),
@@ -143,17 +156,26 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.logout),
-                title: const Text('Logout'),
-                onTap: () {
-                  Navigator.of(sheetContext, rootNavigator: true).pop();
-                  context.read<SessionCubit>().releaseAccount(id);
-                  context.read<AccountBloc>().add(AccountLoggedOut(id));
-                },
+                enabled: isActive,
+                leading: const Icon(Icons.refresh),
+                title: const Text('Reload'),
+                subtitle: isActive
+                    ? null
+                    : const Text('Buka akun ini dulu untuk reload'),
+                onTap: !isActive
+                    ? null
+                    : () {
+                        Navigator.of(sheetContext, rootNavigator: true).pop();
+                        activeSession?.reload();
+                      },
               ),
+
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.red),
-                title: const Text('Delete', style: TextStyle(color: Colors.red)),
+                title: const Text(
+                  'Delete',
+                  style: TextStyle(color: Colors.red),
+                ),
                 onTap: () async {
                   Navigator.of(sheetContext, rootNavigator: true).pop();
                   await _confirmDeleteAccount(context, id, name);
@@ -166,61 +188,125 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
     });
   }
 
-  Future<void> _showRenameDialog(BuildContext context, String id, String currentName) async {
+  Future<void> _showRenameDialog(
+    BuildContext context,
+    String id,
+    String currentName,
+  ) async {
     final activeSession = context.read<SessionCubit>().state.handle;
     final controller = TextEditingController(text: currentName);
-    await showOverlaySafely(activeSession, () => showDialog(
-      context: context,
-      useRootNavigator: true,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Rename account'),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext, rootNavigator: true).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              context
-                  .read<AccountBloc>()
-                  .add(AccountRenamed(id: id, newName: controller.text));
-              Navigator.of(dialogContext, rootNavigator: true).pop();
-            },
-            child: const Text('Save'),
-          ),
-        ],
+    await showOverlaySafely(
+      activeSession,
+      () => showDialog(
+        context: context,
+        useRootNavigator: true,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Rename account'),
+          content: TextField(controller: controller, autofocus: true),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext, rootNavigator: true).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                context.read<AccountBloc>().add(
+                  AccountRenamed(id: id, newName: controller.text),
+                );
+                Navigator.of(dialogContext, rootNavigator: true).pop();
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
       ),
-    ));
+    );
   }
 
-  Future<void> _confirmDeleteAccount(BuildContext context, String id, String name) async {
+  Future<void> _confirmDeleteAccount(
+    BuildContext context,
+    String id,
+    String name,
+  ) async {
     final activeSession = context.read<SessionCubit>().state.handle;
-    await showOverlaySafely(activeSession, () => showDialog(
-      context: context,
-      useRootNavigator: true,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete account?'),
-        content: Text(
-          'This will remove "$name" and delete its local session data. '
-          'This action cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext, rootNavigator: true).pop(),
-            child: const Text('Cancel'),
+    await showOverlaySafely(
+      activeSession,
+      () => showDialog(
+        context: context,
+        useRootNavigator: true,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Delete account?'),
+          content: Text(
+            'This will remove "$name" and delete its local session data. '
+            'This action cannot be undone.',
           ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              Navigator.of(dialogContext, rootNavigator: true).pop();
-              context.read<SessionCubit>().releaseAccount(id);
-              context.read<AccountBloc>().add(AccountDeleted(id));
-            },
-            child: const Text('Delete'),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext, rootNavigator: true).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () {
+                Navigator.of(dialogContext, rootNavigator: true).pop();
+                context.read<SessionCubit>().releaseAccount(id);
+                context.read<AccountBloc>().add(AccountDeleted(id));
+              },
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Mirrors desktop's `_ActiveAccountHeader` exactly (same height, same
+/// surface/border treatment) but adds the settings action inline, since
+/// mobile has no separate rail to park it in.
+class _MobileActiveAccountHeader extends StatelessWidget {
+  const _MobileActiveAccountHeader({
+    required this.account,
+    required this.onOpenSettings,
+  });
+
+  final dynamic account; // Account?
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.only(left: 20, right: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              account?.name ?? AppConstants.appName,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          IconButton(
+            icon: AppConstants.settingsIcon(),
+            onPressed: onOpenSettings,
+            tooltip: 'Settings',
           ),
         ],
       ),
-    ));
+    );
   }
 }

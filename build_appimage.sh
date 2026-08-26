@@ -4,7 +4,7 @@
 set -euo pipefail
 
 APP_NAME="multi_whatsapp_web"
-APP_ID="com.example.multi_whatsapp_web"
+APP_ID="com.bellukstudio.multi_whatsapp_web"
 BUNDLE_DIR="build/linux/x64/release/bundle"
 APPDIR="build/AppDir"
 

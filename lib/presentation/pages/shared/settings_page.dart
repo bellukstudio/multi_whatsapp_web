@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:multi_whatsapp_web/presentation/bloc/session/session_cubit.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../bloc/theme/theme_cubit.dart';
@@ -23,32 +24,37 @@ class SettingsPage extends StatelessWidget {
       body: ListView(
         children: [
           const ListTile(title: Text('Appearance'), dense: true),
-          ListTile(
-            title: const Text('System'),
-            leading: Radio<AppThemeMode>(
-              value: AppThemeMode.system,
-              groupValue: themeMode,
-              onChanged: (v) => context.read<ThemeCubit>().setMode(v!),
+          // RadioGroup replaces the old per-Radio groupValue/onChanged
+          // (deprecated since Flutter 3.32): the group now owns the
+          // selected value and change callback, and each Radio below
+          // only needs its own `value`.
+          RadioGroup<AppThemeMode>(
+            groupValue: themeMode,
+            onChanged: (v) => context.read<ThemeCubit>().setMode(v!),
+            child: Column(
+              children: [
+                ListTile(
+                  title: const Text('System'),
+                  leading: const Radio<AppThemeMode>(
+                    value: AppThemeMode.system,
+                  ),
+                  onTap: () =>
+                      context.read<ThemeCubit>().setMode(AppThemeMode.system),
+                ),
+                ListTile(
+                  title: const Text('Light'),
+                  leading: const Radio<AppThemeMode>(value: AppThemeMode.light),
+                  onTap: () =>
+                      context.read<ThemeCubit>().setMode(AppThemeMode.light),
+                ),
+                ListTile(
+                  title: const Text('Dark'),
+                  leading: const Radio<AppThemeMode>(value: AppThemeMode.dark),
+                  onTap: () =>
+                      context.read<ThemeCubit>().setMode(AppThemeMode.dark),
+                ),
+              ],
             ),
-            onTap: () => context.read<ThemeCubit>().setMode(AppThemeMode.system),
-          ),
-          ListTile(
-            title: const Text('Light'),
-            leading: Radio<AppThemeMode>(
-              value: AppThemeMode.light,
-              groupValue: themeMode,
-              onChanged: (v) => context.read<ThemeCubit>().setMode(v!),
-            ),
-            onTap: () => context.read<ThemeCubit>().setMode(AppThemeMode.light),
-          ),
-          ListTile(
-            title: const Text('Dark'),
-            leading: Radio<AppThemeMode>(
-              value: AppThemeMode.dark,
-              groupValue: themeMode,
-              onChanged: (v) => context.read<ThemeCubit>().setMode(v!),
-            ),
-            onTap: () => context.read<ThemeCubit>().setMode(AppThemeMode.dark),
           ),
           const Divider(),
           if (formFactor == FormFactor.desktop) ...[
@@ -56,14 +62,37 @@ class SettingsPage extends StatelessWidget {
             const ListTile(
               title: Text('Session storage location'),
               subtitle: Text('App support directory (per-account subfolders)'),
-              // PRD §17: desktop MAY show the path; still avoid exposing
-              // raw absolute paths with account-identifying uuids in
-              // plain UI text — show a generic description here and put
-              // the literal path behind an explicit "Reveal" action if
-              // ever needed.
             ),
           ],
-          const Divider(),
+          if (formFactor == FormFactor.mobile) ...[
+            const ListTile(title: Text('Tampilan'), dense: true),
+            Builder(
+              builder: (context) {
+                final handle = context.read<SessionCubit>().mobileHandle;
+                if (handle == null) {
+                  return const ListTile(
+                    title: Text('Mode Desktop'),
+                    subtitle: Text('Buka salah satu akun terlebih dahulu'),
+                    enabled: false,
+                  );
+                }
+                return ValueListenableBuilder<bool>(
+                  valueListenable: handle.desktopModeEnabled,
+                  builder: (context, enabled, _) {
+                    return SwitchListTile(
+                      title: const Text('Mode Desktop'),
+                      subtitle: const Text(
+                        'Tampilkan WhatsApp Web seperti di komputer',
+                      ),
+                      value: enabled,
+                      onChanged: (v) => handle.setDesktopMode(v),
+                    );
+                  },
+                );
+              },
+            ),
+            const Divider(),
+          ],
           ListTile(
             title: const Text('About'),
             subtitle: const Text(

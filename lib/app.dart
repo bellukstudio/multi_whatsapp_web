@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:multi_whatsapp_web/presentation/splash.dart';
 
 import 'core/constants/app_constants.dart';
 import 'core/di/injection.dart';
@@ -82,7 +83,16 @@ class MultiWhatsAppWebApp extends StatelessWidget {
               AppThemeMode.system => ThemeMode.system,
             },
             navigatorObservers: [desktopWebViewRouteObserver],
-            home: const ResponsiveLayout(),
+            home: Builder(
+              builder: (innerContext) => SplashPage(
+                appName: 'Multi WhatsApp Web',
+                onFinished: () {
+                  Navigator.of(innerContext).pushReplacement(
+                    MaterialPageRoute(builder: (_) => const ResponsiveLayout()),
+                  );
+                },
+              ),
+            ),
           );
         },
       ),

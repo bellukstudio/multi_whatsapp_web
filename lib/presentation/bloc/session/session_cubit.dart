@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:multi_whatsapp_web/data/datasources/webview/mobile/mobile_webview_session_handle.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/memory_profiler.dart';
@@ -29,13 +30,13 @@ class SessionCubit extends Cubit<SessionState> {
     required AccountRepository accountRepository,
     required FormFactor formFactor,
     SessionPoolManager? poolManager,
-  })  : _webViewAdapter = webViewAdapter,
-        _accountRepository = accountRepository,
-        _formFactor = formFactor,
-        _pool = formFactor == FormFactor.desktop
-            ? (poolManager ?? SessionPoolManager(webViewAdapter: webViewAdapter))
-            : null,
-        super(const SessionState());
+  }) : _webViewAdapter = webViewAdapter,
+       _accountRepository = accountRepository,
+       _formFactor = formFactor,
+       _pool = formFactor == FormFactor.desktop
+           ? (poolManager ?? SessionPoolManager(webViewAdapter: webViewAdapter))
+           : null,
+       super(const SessionState());
 
   final WebViewAdapter _webViewAdapter;
   final AccountRepository _accountRepository;
@@ -45,6 +46,23 @@ class SessionCubit extends Cubit<SessionState> {
   /// pool (§27).
   final SessionPoolManager? _pool;
 
+  MobileWebViewSessionHandle? get mobileHandle {
+    final handle = state.handle;
+    return handle is MobileWebViewSessionHandle ? handle : null;
+  }
+
+  Future<void> toggleDesktopMode(bool enabled) async {
+    final handle = state.handle;
+    if (handle is! MobileWebViewSessionHandle) return;
+    await handle.setDesktopMode(enabled);
+    // Re-emit so anything watching isDesktopModeEnabled (e.g. the
+    // Settings switch) rebuilds — the handle mutated in place, so
+    // state.copyWith() with no changed fields is enough to trigger a
+    // BlocBuilder rebuild since Cubit emits are reference-based per field
+    // here, not deep-equality on the handle's internals.
+    emit(state.copyWith(handle: handle));
+  }
+
   Future<void> switchTo(Account account) async {
     // IMPORTANT: activeAccountId must be set immediately (optimistically),
     // not only after the async work below succeeds. WebViewContainer keys
@@ -53,11 +71,13 @@ class SessionCubit extends Cubit<SessionState> {
     // set it, a failure (or even just the loading phase) leaves
     // activeAccountId null, so the UI silently stays on the empty state
     // and tapping an account looks like it does nothing at all.
-    emit(state.copyWith(
-      status: ActiveSessionStatus.loading,
-      activeAccountId: account.id,
-      clearError: true,
-    ));
+    emit(
+      state.copyWith(
+        status: ActiveSessionStatus.loading,
+        activeAccountId: account.id,
+        clearError: true,
+      ),
+    );
 
     final WebViewSessionHandle handle;
     try {
@@ -70,26 +90,31 @@ class SessionCubit extends Cubit<SessionState> {
       // state, never as an unhandled exception that crashes the app.
       // activeAccountId is kept set (see note above) so the error is
       // actually shown instead of silently reverting to the empty state.
-      emit(state.copyWith(
-        status: ActiveSessionStatus.error,
-        activeAccountId: account.id,
-        errorMessage: e.toString(),
-      ));
+      emit(
+        state.copyWith(
+          status: ActiveSessionStatus.error,
+          activeAccountId: account.id,
+          errorMessage: e.toString(),
+        ),
+      );
       return;
     }
 
     handle.statusStream.listen(
-      (status) => _accountRepository.updateStatus(id: account.id, status: status),
+      (status) =>
+          _accountRepository.updateStatus(id: account.id, status: status),
       onError: (_) {}, // never let a status-stream error bubble unhandled
     );
 
     await _accountRepository.setActiveAccount(account.id);
 
-    emit(state.copyWith(
-      activeAccountId: account.id,
-      status: ActiveSessionStatus.ready,
-      handle: handle,
-    ));
+    emit(
+      state.copyWith(
+        activeAccountId: account.id,
+        status: ActiveSessionStatus.ready,
+        handle: handle,
+      ),
+    );
   }
 
   /// PRD §26/§27: on mobile, the previous handle is unloaded from memory
@@ -123,7 +148,12 @@ class SessionCubit extends Cubit<SessionState> {
   Future<void> handleAppResumed(Account activeAccount) async {
     if (_formFactor != FormFactor.mobile) return; // desktop: no-op, §14a
 
-    emit(state.copyWith(status: ActiveSessionStatus.reconnecting, clearError: true));
+    emit(
+      state.copyWith(
+        status: ActiveSessionStatus.reconnecting,
+        clearError: true,
+      ),
+    );
     try {
       final handle = await MemoryProfiler.logAround(
         'reload mobile session on resume',
@@ -135,10 +165,12 @@ class SessionCubit extends Cubit<SessionState> {
       await handle.navigateToWhatsAppWeb();
       emit(state.copyWith(status: ActiveSessionStatus.ready, handle: handle));
     } catch (e) {
-      emit(state.copyWith(
-        status: ActiveSessionStatus.error,
-        errorMessage: e.toString(),
-      ));
+      emit(
+        state.copyWith(
+          status: ActiveSessionStatus.error,
+          errorMessage: e.toString(),
+        ),
+      );
     }
   }
 

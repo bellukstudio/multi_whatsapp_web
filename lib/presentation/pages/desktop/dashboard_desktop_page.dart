@@ -11,21 +11,7 @@ import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
-/// PRD §6.1 desktop layout — REDESIGNED to a modern, minimal icon rail
-/// (see [Sidebar]) with no top AppBar at all; the active account's name
-/// now surfaces in a slim inline header above the WebView itself, so the
-/// WebView gets nearly the full window instead of losing width to a wide
-/// always-expanded sidebar *and* height to a Material AppBar.
-///
-/// ┌────┬──────────────────────────────────┐
-/// │ +  │  Personal                    ⟳    │
-/// │ 🟢A├──────────────────────────────────┤
-/// │ 🟢B│                                   │
-/// │ 🔴C│           WhatsApp Web           │
-/// │    │                                   │
-/// │ ⚙  │                                   │
-/// └────┴──────────────────────────────────┘
-///
+
 /// IMPORTANT (bug fix): every navigation triggered from here — Settings,
 /// Add Account, rename/delete dialogs — now goes through
 /// [showOverlaySafely]. The native WebKitGTK/webview_windows surface is
