@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:multi_whatsapp_web/presentation/splash.dart';
@@ -14,6 +16,7 @@ import 'domain/usecases/logout_account.dart';
 import 'domain/usecases/rename_account.dart';
 import 'presentation/bloc/account/account_bloc.dart';
 import 'presentation/bloc/session/session_cubit.dart';
+import 'presentation/bloc/session/session_pool_manager.dart';
 import 'presentation/bloc/theme/theme_cubit.dart';
 import 'presentation/responsive/responsive_layout.dart';
 
@@ -67,6 +70,20 @@ class MultiWhatsAppWebApp extends StatelessWidget {
             webViewAdapter: getIt<WebViewAdapter>(),
             accountRepository: getIt<AccountRepository>(),
             formFactor: formFactor,
+            // Windows only ever keeps ONE WebviewController alive at a
+            // time (see windows_webview_adapter.dart) — a second
+            // concurrently-warm controller is what caused the
+            // "Creating DispatcherQueueController failed" crash.
+            // Capping the warm pool at 1 here makes SessionPoolManager
+            // fully dispose the previous session before creating the
+            // next one, instead of trying to keep several warm side by
+            // side. Other desktop platforms keep the full §26 cap.
+            poolManager: formFactor == FormFactor.desktop && Platform.isWindows
+                ? SessionPoolManager(
+                    webViewAdapter: getIt<WebViewAdapter>(),
+                    maxWarmSessions: 1,
+                  )
+                : null,
           ),
         ),
       ],

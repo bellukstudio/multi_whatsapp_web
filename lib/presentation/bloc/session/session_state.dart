@@ -8,6 +8,7 @@ class SessionState extends Equatable {
     this.status = ActiveSessionStatus.none,
     this.handle,
     this.errorMessage,
+    this.errorNeedsAppRestart = false,
   });
 
   final String? activeAccountId;
@@ -24,11 +25,19 @@ class SessionState extends Equatable {
   /// instead of letting the exception crash the app.
   final String? errorMessage;
 
+  /// True when [errorMessage] came from a
+  /// `WebView2RuntimeMissingException.isDispatcherQueueConflict` — see
+  /// `windows_webview_adapter.dart`. Retrying/waiting never fixes this;
+  /// [WebViewContainer]'s error state uses this to show a "Restart
+  /// Aplikasi" action ([AppRestarter]) instead of a generic retry hint.
+  final bool errorNeedsAppRestart;
+
   SessionState copyWith({
     String? activeAccountId,
     ActiveSessionStatus? status,
     WebViewSessionHandle? handle,
     String? errorMessage,
+    bool errorNeedsAppRestart = false,
     bool clearHandle = false,
     bool clearError = false,
   }) {
@@ -37,9 +46,12 @@ class SessionState extends Equatable {
       status: status ?? this.status,
       handle: clearHandle ? null : (handle ?? this.handle),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      errorNeedsAppRestart:
+          clearError ? false : (errorNeedsAppRestart || this.errorNeedsAppRestart),
     );
   }
 
   @override
-  List<Object?> get props => [activeAccountId, status, handle, errorMessage];
+  List<Object?> get props =>
+      [activeAccountId, status, handle, errorMessage, errorNeedsAppRestart];
 }

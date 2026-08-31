@@ -3,14 +3,9 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  connectivity_plus
-  flutter_inappwebview_windows
   flutter_secure_storage_windows
   isar_community_flutter_libs
-  screen_retriever
-  tray_manager
   webview_windows
-  window_manager
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

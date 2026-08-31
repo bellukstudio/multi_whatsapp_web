@@ -1,5 +1,6 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
+
 project(multi_whatsapp_web LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
@@ -28,6 +29,18 @@ set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}")
 set(CMAKE_SHARED_LINKER_FLAGS_PROFILE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}")
 set(CMAKE_C_FLAGS_PROFILE "${CMAKE_C_FLAGS_RELEASE}")
 set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
+
+# FIX (error C2338 di <experimental/coroutine>): toolset compiler MSVC
+# terbaru (VS 2026, v14.51+) menjadikan warning deprecation coroutine
+# gaya lama (dipakai plugin C++/WinRT lama seperti flutter_inappwebview_
+# windows dan webview_windows lewat flag /await + <experimental/
+# coroutine>) sebagai HARD ERROR, bukan cuma peringatan seperti versi
+# compiler sebelumnya. Plugin-plugin itu belum dimigrasi ke <coroutine>
+# standar C++20. Macro ini (disarankan langsung oleh pesan error MSVC
+# sendiri) menurunkan itu kembali jadi non-fatal untuk sementara.
+# `add_definitions()` di sini berlaku untuk seluruh subdirectory/plugin
+# yang di-add setelah baris ini, termasuk semua plugin native.
+add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)

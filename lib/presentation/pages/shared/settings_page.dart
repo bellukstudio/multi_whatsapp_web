@@ -64,35 +64,35 @@ class SettingsPage extends StatelessWidget {
               subtitle: Text('App support directory (per-account subfolders)'),
             ),
           ],
-          if (formFactor == FormFactor.mobile) ...[
-            const ListTile(title: Text('Tampilan'), dense: true),
-            Builder(
-              builder: (context) {
-                final handle = context.read<SessionCubit>().mobileHandle;
-                if (handle == null) {
-                  return const ListTile(
-                    title: Text('Mode Desktop'),
-                    subtitle: Text('Buka salah satu akun terlebih dahulu'),
-                    enabled: false,
-                  );
-                }
-                return ValueListenableBuilder<bool>(
-                  valueListenable: handle.desktopModeEnabled,
-                  builder: (context, enabled, _) {
-                    return SwitchListTile(
-                      title: const Text('Mode Desktop'),
-                      subtitle: const Text(
-                        'Tampilkan WhatsApp Web seperti di komputer',
-                      ),
-                      value: enabled,
-                      onChanged: (v) => handle.setDesktopMode(v),
-                    );
-                  },
-                );
-              },
-            ),
-            const Divider(),
-          ],
+          // if (formFactor == FormFactor.mobile) ...[
+          //   const ListTile(title: Text('Tampilan'), dense: true),
+          //   Builder(
+          //     builder: (context) {
+          //       final handle = context.read<SessionCubit>().mobileHandle;
+          //       if (handle == null) {
+          //         return const ListTile(
+          //           title: Text('Mode Desktop'),
+          //           subtitle: Text('Buka salah satu akun terlebih dahulu'),
+          //           enabled: false,
+          //         );
+          //       }
+          //       return ValueListenableBuilder<bool>(
+          //         valueListenable: handle.desktopModeEnabled,
+          //         builder: (context, enabled, _) {
+          //           return SwitchListTile(
+          //             title: const Text('Mode Desktop'),
+          //             subtitle: const Text(
+          //               'Tampilkan WhatsApp Web seperti di komputer',
+          //             ),
+          //             value: enabled,
+          //             onChanged: (v) => handle.setDesktopMode(v),
+          //           );
+          //         },
+          //       );
+          //     },
+          //   ),
+          //   const Divider(),
+          // ],
           ListTile(
             title: const Text('About'),
             subtitle: const Text(

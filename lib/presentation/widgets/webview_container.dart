@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+// import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:webview_windows/webview_windows.dart' as win;
 
 import '../../app.dart' show desktopWebViewRouteObserver;
+import '../../core/utils/app_restarter.dart';
 import '../../data/datasources/webview/desktop/linux_webview_adapter.dart';
 import '../../data/datasources/webview/desktop/linux_webkit_platform_view.dart';
 import '../../data/datasources/webview/desktop/windows_webview_adapter.dart';
@@ -50,7 +52,12 @@ class WebViewContainer extends StatelessWidget {
       case ActiveSessionStatus.reconnecting:
         return const _ReconnectingState();
       case ActiveSessionStatus.error:
-        return _ErrorState(message: sessionState.errorMessage);
+        debugPrint(sessionState.errorMessage);
+
+        return _ErrorState(
+          message: sessionState.errorMessage,
+          needsAppRestart: sessionState.errorNeedsAppRestart,
+        );
       case ActiveSessionStatus.none:
       case ActiveSessionStatus.ready:
         break;
@@ -312,9 +319,7 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
         WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
         return true;
       },
-      child: SizeChangedLayoutNotifier(
-        child: SizedBox.expand(key: _boxKey),
-      ),
+      child: SizeChangedLayoutNotifier(child: SizedBox.expand(key: _boxKey)),
     );
   }
 }
@@ -324,9 +329,9 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
 /// just an invisible-but-still-resident WebView (see class doc above).
 class _MobileEngineSurface extends StatelessWidget {
   const _MobileEngineSurface({required this.handle});
-
+ 
   final MobileWebViewSessionHandle handle;
-
+ 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
@@ -334,19 +339,15 @@ class _MobileEngineSurface extends StatelessWidget {
       builder: (context, mounted, _) {
         if (!mounted) {
           // Deliberately returns an empty box rather than keeping the
-          // InAppWebView in the tree — this is the unmount that frees
+          // WebViewWidget in the tree — this is the unmount that frees
           // native memory once handle.unloadFromMemory() has run.
           return const SizedBox.shrink();
         }
-        return InAppWebView(
-          initialSettings: handle.settings,
-          onWebViewCreated: handle.bindController,
-        );
+        return WebViewWidget(controller: handle.controller);
       },
     );
   }
 }
-
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
@@ -375,9 +376,15 @@ class _ReconnectingState extends StatelessWidget {
 }
 
 class _ErrorState extends StatelessWidget {
-  const _ErrorState({this.message});
+  const _ErrorState({this.message, this.needsAppRestart = false});
 
   final String? message;
+
+  /// True when this error is a WebView2 DispatcherQueue conflict — see
+  /// `WebView2RuntimeMissingException.isDispatcherQueueConflict`. Retrying
+  /// or reinstalling WebView2 does nothing for this specific case; only
+  /// a full process restart clears the orphaned native state.
+  final bool needsAppRestart;
 
   @override
   Widget build(BuildContext context) {
@@ -393,9 +400,17 @@ class _ErrorState extends StatelessWidget {
             if (message != null) ...[
               const SizedBox(height: 8),
               Text(
-                message!,
+                '$message',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+            if (needsAppRestart) ...[
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: () => AppRestarter.restart(),
+                icon: const Icon(Icons.restart_alt),
+                label: const Text('Restart Aplikasi'),
               ),
             ],
           ],

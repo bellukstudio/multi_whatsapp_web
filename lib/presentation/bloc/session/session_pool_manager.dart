@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:io' show Platform;
 
 import 'package:multi_whatsapp_web/core/constants/app_constants.dart';
 import 'package:multi_whatsapp_web/core/utils/memory_profiler.dart';
@@ -38,12 +39,32 @@ class SessionPoolManager {
 
   String? _activeAccountId;
 
+  /// Serializes [acquire] calls so two overlapping calls (e.g. the user
+  /// tapping two different accounts before the first switch has finished)
+  /// can never both pass the `_warm.length >= _maxWarmSessions` check
+  /// before either has updated [_warm]. Without this, two concurrent
+  /// `createOrResumeSession` calls can both reach
+  /// `WebviewController.initialize()` at the same time — on Windows that
+  /// means two `DispatcherQueueController`s on one thread, which is
+  /// exactly what produces `PlatformException(unsupported_platform, "The
+  /// platform is not supported")` (webview_windows only allows one; see
+  /// the FIX note in SessionCubit / jnschulze/flutter-webview-windows#119).
+  Future<void> _lock = Future<void>.value();
+
   int get warmCount => _warm.length;
 
   /// Makes [account] the active, fully-rendering session. Evicts the LRU
   /// warm session first if the pool is at capacity and [account] isn't
   /// already warm.
-  Future<WebViewSessionHandle> acquire(Account account) async {
+  Future<WebViewSessionHandle> acquire(Account account) {
+    final result = _lock.then((_) => _acquireLocked(account));
+    // Keep the chain alive even if this acquire failed, so the *next*
+    // caller still waits for it instead of racing it.
+    _lock = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<WebViewSessionHandle> _acquireLocked(Account account) async {
     final previousActiveId = _activeAccountId;
 
     if (_warm.containsKey(account.id)) {
@@ -97,6 +118,18 @@ class SessionPoolManager {
         await handle.unloadFromMemory();
         await handle.dispose();
       });
+      // WORKAROUND (PlatformException(unsupported_platform, "The platform
+      // is not supported")): on Windows, WebviewController.dispose() tears
+      // down the native WebView2 DispatcherQueueController *asynchronously*
+      // — the awaited Future above can resolve before that teardown is
+      // actually done. Creating the next WebviewController immediately
+      // after can still race the previous one's cleanup. A short delay
+      // here gives the native side time to finish before the pool creates
+      // the next session. Remove once migrated off webview_windows 0.4.0
+      // to a version/package that reference-counts a shared environment.
+      if (Platform.isWindows) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
     }
   }
 

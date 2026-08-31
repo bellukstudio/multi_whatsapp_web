@@ -1,64 +1,39 @@
-import 'dart:io';
+import 'package:multi_whatsapp_web/core/constants/app_constants.dart';
 
-import 'package:device_info_plus/device_info_plus.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-
-import '../../../../core/constants/app_constants.dart';
 import '../../../../domain/repositories/webview_adapter.dart';
 import 'mobile_webview_session_handle.dart';
 
-/// PRD §24 row 4 — Android / `flutter_inappwebview`.
+/// PRD §24 row 4 — Android, now via `webview_flutter` instead of
+/// `flutter_inappwebview` (see `mobile_webview_session_handle.dart` for
+/// why this switch happened).
 ///
-/// Isolation mechanism: `dataDirectorySuffix` per WebView instance,
-/// available on **Android 10+ (API 29+)**. Below that, PRD §24 says full
-/// isolation is not supported — this adapter gates it off (returns
-/// `isSupported: false`) rather than silently degrading to shared
-/// storage.
-///
-/// RAM policy (PRD §26/§27): only one [MobileWebViewSessionHandle] is
-/// ever active at a time — enforced by [SessionCubit], not here. This
-/// adapter's job is just to hand back a correctly-isolated, disposable
-/// handle each time.
+/// used `dataDirectorySuffix` (Android 10+ / API 29+) as its per-account
+/// isolation primitive, and this probe reported `isSupported: true` only
+/// above that SDK level. `webview_flutter_android`'s public API has no
+/// equivalent — there is currently NO native per-account data-directory
+/// isolation in this adapter. `probeIsolationSupport()` below reports
+/// this honestly (`isSupported: false`) rather than silently claiming a
+/// guarantee that no longer holds. See
+/// `mobile_webview_session_handle.dart`'s class doc for the two
+/// realistic ways to restore real isolation if/when needed.
 class AndroidWebViewAdapter implements WebViewAdapter {
   @override
   WebViewEngineKind get engineKind => WebViewEngineKind.inAppWebViewAndroid;
 
   @override
   Future<IsolationProbeResult> probeIsolationSupport() async {
-    final sdkInt = await _androidSdkInt();
-
-    if (sdkInt == null) {
-      return const IsolationProbeResult(
-        isSupported: false,
-        engine: WebViewEngineKind.inAppWebViewAndroid,
-        isNativeIsolation: false,
-        reason: 'Could not determine Android SDK version.',
-      );
-    }
-
-    if (sdkInt >= AppConstants.minAndroidSdkForDataDirSuffix) {
-      return const IsolationProbeResult(
-        isSupported: true,
-        engine: WebViewEngineKind.inAppWebViewAndroid,
-        isNativeIsolation: true,
-        reason: 'Android 10+: dataDirectorySuffix supported.',
-      );
-    }
-
     return const IsolationProbeResult(
       isSupported: false,
       engine: WebViewEngineKind.inAppWebViewAndroid,
       isNativeIsolation: false,
-      reason: 'Android < 10 (API < 29) does not support '
-          'dataDirectorySuffix — full isolation unavailable. PRD §24 '
-          'requires an explicit minimum-SDK decision before shipping.',
+      reason: 'webview_flutter (the package now used on Android, after '
+          'moving off flutter_inappwebview to resolve a Windows-only '
+          'DispatcherQueueController conflict) has no public API for a '
+          'per-instance data-directory suffix. Accounts currently share '
+          'one cookie/localStorage store on Android. See '
+          'mobile_webview_session_handle.dart doc comment for how to '
+          'restore genuine isolation if this is required before shipping.',
     );
-  }
-
-  Future<int?> _androidSdkInt() async {
-    if (!Platform.isAndroid) return null;
-    final info = await DeviceInfoPlugin().androidInfo;
-    return info.version.sdkInt;
   }
 
   @override
@@ -66,29 +41,7 @@ class AndroidWebViewAdapter implements WebViewAdapter {
     required String accountId,
     required String sessionPath,
   }) async {
-    final settings = InAppWebViewSettings(
-      // Distinct native storage directory per account — this IS the
-      // isolation primitive on Android (PRD §24 row 4). `accountId` is a
-      // uuid (never a user-facing name), so it's also safe as a
-      // filesystem-suffix per §25.
-      // dataDirectorySuffix: accountId,
-      // Also keep it out of any shared/external location per §25.
-      allowFileAccess: false,
-      // Perf/lightweight tuning: explicit (matches the plugin default,
-      // but pinned here so it can't silently change on a package
-      // upgrade) — Hybrid Composition is what lets the soft keyboard and
-      // text-input events sync correctly with the embedded WebView; with
-      // it off, typing into a WebView text field is a well-known source
-      // of visible input lag on Android.
-      useHybridComposition: true,
-      cacheEnabled: true,
-      disableDefaultErrorPage: true,
-      // WhatsApp Web doesn't need autoplaying media; keeping this gated
-      // avoids background audio/video decode work competing with the UI
-      // thread for CPU.
-      mediaPlaybackRequiresUserGesture: true,
-    );
-    return MobileWebViewSessionHandle(accountId: accountId, settings: settings);
+    return MobileWebViewSessionHandle(accountId: accountId);
   }
 
   @override
@@ -96,12 +49,10 @@ class AndroidWebViewAdapter implements WebViewAdapter {
     required String accountId,
     required String sessionPath,
   }) {
-    // PRD §11: the previous handle may already be gone (OS-killed WebView
-    // process). Creating fresh with the same dataDirectorySuffix picks
-    // back up the persisted cookies/localStorage on disk — the caller
-    // (SessionCubit.handleAppResumed) is responsible for showing a
-    // "reconnecting" state while this resolves rather than assuming
-    // instant continuity.
+    // PRD §11: mobile OS may fully kill the WebView process while
+    // backgrounded. Creating fresh picks back up whatever the shared
+    // cookie jar currently holds — see the TODO ISOLATION note above for
+    // the caveat this now carries around multi-account correctness.
     return createOrResumeSession(accountId: accountId, sessionPath: sessionPath);
   }
 }

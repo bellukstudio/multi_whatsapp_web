@@ -14,10 +14,10 @@ import 'mobile/ios_webview_adapter.dart';
 /// only ever sees the [WebViewAdapter] interface.
 ///
 /// PRD §3 rollout order: Windows -> Android -> Linux -> macOS -> iOS.
-/// Each concrete adapter below currently ships as a scaffold with the
-/// isolation strategy documented per §24 — wire up the real
-/// webview_windows / flutter_inappwebview calls during that platform's
-/// Phase 1 PoC (§34) before building UI on top of it.
+/// Android/iOS now run on `webview_flutter` instead of
+/// `flutter_inappwebview` — see `mobile/mobile_webview_session_handle.dart`
+/// for why, and its TODO ISOLATION note before relying on multi-account
+/// separation on mobile.
 class WebViewAdapterFactory {
   static WebViewAdapter create() {
     if (Platform.isWindows) return WindowsWebViewAdapter();
