@@ -118,17 +118,28 @@ class SessionPoolManager {
         await handle.unloadFromMemory();
         await handle.dispose();
       });
-      // WORKAROUND (PlatformException(unsupported_platform, "The platform
-      // is not supported")): on Windows, WebviewController.dispose() tears
-      // down the native WebView2 DispatcherQueueController *asynchronously*
-      // — the awaited Future above can resolve before that teardown is
-      // actually done. Creating the next WebviewController immediately
-      // after can still race the previous one's cleanup. A short delay
-      // here gives the native side time to finish before the pool creates
-      // the next session. Remove once migrated off webview_windows 0.4.0
-      // to a version/package that reference-counts a shared environment.
+      // WORKAROUND: on Windows, WebviewController.dispose() tears down
+      // the native WebView2 environment/process *asynchronously* — the
+      // awaited Future above can resolve before that teardown is
+      // actually done. Creating the next WebviewController (and
+      // reconfiguring the shared environment to the new account's
+      // userDataPath) immediately after can still race the previous
+      // one's cleanup.
+      //
+      // BUG THIS CAUSED (fixed alongside this delay bump): when the
+      // race was lost, windows_webview_adapter.dart used to silently let
+      // the new account join the OLD (not-yet-torn-down) environment
+      // instead of failing — i.e. two accounts would silently share one
+      // WhatsApp Web cookie/localStorage profile, which WhatsApp Web
+      // then treats as the same session opened twice and force-logs out
+      // BOTH sides. windows_webview_adapter.dart now retries with
+      // backoff (up to ~5.4s total) instead of silently sharing, so a
+      // slow teardown here just means a slightly slower switch, not a
+      // silent data-isolation bug. This delay is a first line of
+      // defense to make that retry path rarely needed in practice, not
+      // the only thing preventing the bug anymore.
       if (Platform.isWindows) {
-        await Future<void>.delayed(const Duration(milliseconds: 500));
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
       }
     }
   }

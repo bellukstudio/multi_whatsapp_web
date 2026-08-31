@@ -72,36 +72,73 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     // that requirement is NOT met by this package alone and needs a
     // separate fix (e.g. serializing environment reconfiguration around
     // pool eviction, or moving to a multi-process model like Linux's).
-    try {
-      await WebviewController.initializeEnvironment(userDataPath: sessionPath);
-    } on PlatformException catch (e) {
-      // Only swallow the specific "environment already configured for a
-      // different path while controllers are alive" case — surface
-      // anything else (e.g. genuinely missing WebView2 Runtime) so it
-      // isn't hidden behind a misleading "isolation not available"
-      // assumption.
-      final detail = e.toString().toLowerCase();
-      final isEnvironmentBusy =
-          detail.contains('environment') &&
-          (detail.contains('already') || detail.contains('alive'));
-      if (!isEnvironmentBusy) {
-        throw WebView2RuntimeMissingException(originalError: e);
+    // FIX (bug: opening a 2nd account logs BOTH accounts out): this used
+    // to catch the "environment busy" PlatformException once and then
+    // silently let this controller join whatever environment/userDataPath
+    // was already active — i.e. silently SHARE the previous account's
+    // cookie/localStorage profile instead of getting its own. WhatsApp
+    // Web then sees what looks like the same session opened twice and
+    // force-logs out both sides. This happened even with
+    // SessionPoolManager capped to maxWarmSessions=1, because the
+    // previous controller's native WebView2 teardown
+    // (`WebviewController.dispose()`) completes ASYNCHRONOUSLY — the
+    // pool's fixed 500ms eviction delay is a guess, not a guarantee, and
+    // a slow teardown (fully tearing down a Chromium profile can
+    // legitimately take longer under load) meant `initializeEnvironment`
+    // for the NEW account could still race the OLD environment's
+    // teardown and silently fall back to sharing it.
+    //
+    // Now: retry with backoff instead of silently joining on the first
+    // failure. Only after genuinely exhausting retries do we give up —
+    // and even then we FAIL LOUDLY instead of silently sharing a profile,
+    // since a visible error is far better than two accounts quietly
+    // losing their WhatsApp session.
+    const environmentRetryDelays = [
+      Duration(milliseconds: 300),
+      Duration(milliseconds: 600),
+      Duration(milliseconds: 1000),
+      Duration(milliseconds: 1500),
+      Duration(milliseconds: 2000),
+    ];
+
+    Object? lastEnvironmentError;
+    var environmentReady = false;
+
+    for (var attempt = 0; !environmentReady; attempt++) {
+      try {
+        await WebviewController.initializeEnvironment(
+          userDataPath: sessionPath,
+        );
+        environmentReady = true;
+      } on PlatformException catch (e) {
+        final detail = e.toString().toLowerCase();
+        final isEnvironmentBusy =
+            detail.contains('environment') &&
+            (detail.contains('already') || detail.contains('alive'));
+
+        if (!isEnvironmentBusy) {
+          // Something else entirely (e.g. genuinely missing WebView2
+          // Runtime) — don't retry, surface immediately.
+          throw WebView2RuntimeMissingException(originalError: e);
+        }
+
+        lastEnvironmentError = e;
+
+        if (attempt >= environmentRetryDelays.length - 1) {
+          // Exhausted retries — the previous environment genuinely never
+          // freed up in time. Fail loudly rather than silently sharing
+          // its profile with this account.
+          throw WebView2RuntimeMissingException(originalError: lastEnvironmentError);
+        }
+
+        // ignore: avoid_print
+        print(
+          '[WindowsWebViewAdapter] WebView2 environment still torn '
+          'down/switching for another account — retrying for $accountId '
+          '(attempt ${attempt + 1}/${environmentRetryDelays.length})...',
+        );
+        await Future<void>.delayed(environmentRetryDelays[attempt]);
       }
-      // Environment busy with a different account's userDataPath: we
-      // proceed anyway and let this controller join the EXISTING shared
-      // environment (whichever account's userDataPath won first). This
-      // keeps the app usable rather than blocking session creation
-      // outright, but it means this account will NOT get its own
-      // isolated cookies/localStorage until the other account's
-      // controller(s) are disposed. Surfacing this via debugPrint so
-      // it's visible during development/QA rather than silently
-      // degrading isolation.
-      // ignore: avoid_print
-      print(
-        '[WindowsWebViewAdapter] WebView2 environment already active for '
-        'another account — $accountId will share that environment instead '
-        'of getting its own isolated profile until it is freed.',
-      );
     }
 
     final controller = WebviewController();

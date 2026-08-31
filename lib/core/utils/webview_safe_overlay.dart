@@ -7,26 +7,29 @@ import '../../domain/repositories/webview_adapter.dart';
 /// selama native view itu visible. Wrapper ini memakai ulang
 /// pauseRendering()/resumeRendering() (awalnya untuk PRD §27) untuk
 /// menyembunyikan native view sementara selama overlay Flutter tampil.
+const _kNativeCallTimeout = Duration(milliseconds: 800);
 Future<T?> showOverlaySafely<T>(
   WebViewSessionHandle? activeSession,
   Future<T?> Function() showOverlay,
 ) async {
   try {
-    await activeSession?.pauseRendering();
+    await activeSession?.pauseRendering().timeout(_kNativeCallTimeout);
   } catch (_) {
-    // The native WebView can reject pause/resume while it is being torn
-    // down or reloaded (common on desktop during a menu/dialog transition).
-    // Keep the Flutter overlay open instead of crashing the whole app.
+    // Covers BOTH: (a) the native WebView rejecting pause/resume while
+    // it's being torn down/reloaded (original comment's case), and now
+    // also (b) TimeoutException from the .timeout() above when the
+    // native call hangs instead of erroring. Either way, keep going —
+    // never let this block the Flutter overlay from showing.
   }
-
+ 
   try {
     return await showOverlay();
   } finally {
     try {
-      await activeSession?.resumeRendering();
+      await activeSession?.resumeRendering().timeout(_kNativeCallTimeout);
     } catch (_) {
-      // Likewise, a canceled/resumed WebView operation should never block the
-      // overlay dismissal flow.
+      // Likewise, a canceled/resumed/hung WebView operation should never
+      // block the overlay dismissal flow.
     }
   }
 }
