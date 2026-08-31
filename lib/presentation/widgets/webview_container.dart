@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:multi_whatsapp_web/core/utils/android_native_webview.dart';
+import 'package:multi_whatsapp_web/domain/repositories/webview_adapter.dart';
 
 import 'package:webview_windows/webview_windows.dart' as win;
 
@@ -76,8 +77,7 @@ class _EngineSurface extends StatelessWidget {
     if (Platform.isLinux && handle is LinuxWebViewSessionHandle) {
       return _LinuxEngineSurface(handle: handle);
     }
-
-    if (handle is MobileWebViewSessionHandle) {
+    if (handle is AndroidNativeWebViewSessionHandle) {
       return _MobileEngineSurface(handle: handle);
     }
 
@@ -290,18 +290,23 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
 class _MobileEngineSurface extends StatelessWidget {
   const _MobileEngineSurface({required this.handle});
 
-  final MobileWebViewSessionHandle handle;
+  final WebViewSessionHandle handle;
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: handle.shouldBeMounted,
-      builder: (context, mounted, _) {
-        if (!mounted) {
-          return const SizedBox.shrink();
-        }
-        return WebViewWidget(controller: handle.controller);
-      },
+    if (handle is AndroidNativeWebViewSessionHandle) {
+      return AndroidNativeWebView(handle: handle as AndroidNativeWebViewSessionHandle);
+    }
+    // iOS native implementation not built yet — placeholder so the app
+    // doesn't crash if this is somehow reached on iOS before that lands.
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Text(
+          'WebView native iOS belum tersedia — menyusul.',
+          textAlign: TextAlign.center,
+        ),
+      ),
     );
   }
 }

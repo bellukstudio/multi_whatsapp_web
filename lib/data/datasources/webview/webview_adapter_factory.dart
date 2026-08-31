@@ -13,7 +13,7 @@ class WebViewAdapterFactory {
     if (Platform.isMacOS) return MacOSWebViewAdapter();
     if (Platform.isLinux) return LinuxWebViewAdapter();
     if (Platform.isAndroid) return AndroidWebViewAdapter();
-    if (Platform.isIOS) return IOSWebViewAdapter();
+    // if (Platform.isIOS) return IOSWebViewAdapter();
     throw UnsupportedError(
       'Multi WhatsApp Web does not target this platform (PRD §3).',
     );

@@ -18,80 +18,82 @@ class DashboardDesktopPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: BlocBuilder<AccountBloc, AccountState>(
-        builder: (context, accountState) {
-          return BlocBuilder<SessionCubit, SessionState>(
-            builder: (context, sessionState) {
-              final activeMatches = accountState.accounts.where(
-                (a) => a.id == sessionState.activeAccountId,
-              );
-              final activeAccount = activeMatches.isEmpty
-                  ? null
-                  : activeMatches.first;
+      body: SafeArea(
+        child: BlocBuilder<AccountBloc, AccountState>(
+          builder: (context, accountState) {
+            return BlocBuilder<SessionCubit, SessionState>(
+              builder: (context, sessionState) {
+                final activeMatches = accountState.accounts.where(
+                      (a) => a.id == sessionState.activeAccountId,
+                );
+                final activeAccount = activeMatches.isEmpty
+                    ? null
+                    : activeMatches.first;
 
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Sidebar(
-                    accounts: accountState.accounts,
-                    activeAccountId: sessionState.activeAccountId,
-                    activeSession: sessionState.handle,
-                    onSelect: (a) => context.read<SessionCubit>().switchTo(a),
-                    onAdd: () => showOverlaySafely(
-                      sessionState.handle,
-                      () => Navigator.of(
-                        context,
-                      ).push(desktopPageRoute((_) => const AddAccountPage())),
-                    ),
-                    onOpenSettings: () => showOverlaySafely(
-                      sessionState.handle,
-                      () => Navigator.of(context).push(
-                        desktopPageRoute(
-                          (_) => const SettingsPage(
-                            formFactor: FormFactor.desktop,
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Sidebar(
+                      accounts: accountState.accounts,
+                      activeAccountId: sessionState.activeAccountId,
+                      activeSession: sessionState.handle,
+                      onSelect: (a) => context.read<SessionCubit>().switchTo(a),
+                      onAdd: () => showOverlaySafely(
+                        sessionState.handle,
+                            () => Navigator.of(
+                          context,
+                        ).push(desktopPageRoute((_) => const AddAccountPage())),
+                      ),
+                      onOpenSettings: () => showOverlaySafely(
+                        sessionState.handle,
+                            () => Navigator.of(context).push(
+                          desktopPageRoute(
+                                (_) => const SettingsPage(
+                              formFactor: FormFactor.desktop,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    onRename: (a) => showOverlaySafely(
-                      sessionState.handle,
-                      () => _showRenameDialog(context, a.id, a.name),
-                    ),
+                      onRename: (a) => showOverlaySafely(
+                        sessionState.handle,
+                            () => _showRenameDialog(context, a.id, a.name),
+                      ),
 
-                    onDelete: (a) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        showOverlaySafely(
-                          sessionState.handle,
-                          () => _confirmDeleteAccount(context, a),
-                        );
-                      });
-                    },
-                  ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _ActiveAccountHeader(
-                          account: activeAccount,
-                          canReload: sessionState.handle != null,
-                          onReload: () =>
-                              context.read<SessionCubit>().reloadActive(),
-                        ),
-                        Expanded(
-                          child: WebViewContainer(
-                            account: activeAccount,
-                            sessionState: sessionState,
-                          ),
-                        ),
-                      ],
+                      onDelete: (a) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          showOverlaySafely(
+                            sessionState.handle,
+                                () => _confirmDeleteAccount(context, a),
+                          );
+                        });
+                      },
                     ),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _ActiveAccountHeader(
+                            account: activeAccount,
+                            canReload: sessionState.handle != null,
+                            onReload: () =>
+                                context.read<SessionCubit>().reloadActive(),
+                          ),
+                          Expanded(
+                            child: WebViewContainer(
+                              account: activeAccount,
+                              sessionState: sessionState,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        ),
+      )
     );
   }
 
