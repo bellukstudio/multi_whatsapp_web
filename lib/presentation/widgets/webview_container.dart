@@ -3,7 +3,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-// import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+
 import 'package:webview_windows/webview_windows.dart' as win;
 
 import '../../app.dart' show desktopWebViewRouteObserver;
@@ -15,18 +15,6 @@ import '../../data/datasources/webview/mobile/mobile_webview_session_handle.dart
 import '../../domain/entities/account.dart';
 import '../bloc/session/session_cubit.dart';
 
-/// Renders the real per-platform WebView widget bound to
-/// `sessionState.handle`. This is the ONLY widget in the app that
-/// imports `webview_windows` / `flutter_inappwebview` directly — every
-/// other widget only sees [SessionCubit]/`WebViewSessionHandle` (PRD
-/// §10 boundary).
-///
-/// RAM-critical detail (§26/§27): on mobile, this widget listens to
-/// [MobileWebViewSessionHandle.shouldBeMounted] and actually removes the
-/// `InAppWebView` element from the tree when it flips to false — that
-/// unmount is what lets the native Android View / WKWebView be
-/// garbage-collected after `unloadFromMemory()`. Just hiding it with
-/// `Offstage`/`Visibility` would keep it resident in memory.
 class WebViewContainer extends StatelessWidget {
   const WebViewContainer({
     super.key,
@@ -39,13 +27,6 @@ class WebViewContainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Check status BEFORE the null-account check. SessionCubit now sets
-    // activeAccountId optimistically as soon as an account is tapped (see
-    // switchTo()), so `account` should be non-null whenever status is
-    // loading/reconnecting/error — but if it's ever still null (e.g. the
-    // account was deleted mid-switch), we still want loading/error to be
-    // visible rather than falling back to the empty state, which is what
-    // made clicks look like they did nothing.
     switch (sessionState.status) {
       case ActiveSessionStatus.loading:
         return const Center(child: CircularProgressIndicator());
@@ -67,8 +48,6 @@ class WebViewContainer extends StatelessWidget {
       return const _EmptyState();
     }
 
-    // Only ActiveSessionStatus.none/ready can still reach here — the other
-    // cases already returned above.
     return _EngineSurface(account: account!, sessionState: sessionState);
   }
 }
@@ -91,7 +70,7 @@ class _EngineSurface extends StatelessWidget {
     }
 
     if (Platform.isWindows && handle is WindowsWebViewSessionHandle) {
-      return win.Webview(handle.controller);
+      return _WindowsEngineSurface(handle: handle);
     }
 
     if (Platform.isLinux && handle is LinuxWebViewSessionHandle) {
@@ -102,8 +81,6 @@ class _EngineSurface extends StatelessWidget {
       return _MobileEngineSurface(handle: handle);
     }
 
-    // macOS: not yet PoC'd (§24) — placeholder until its adapter
-    // produces a real handle type.
     return Container(
       color: Colors.black12,
       alignment: Alignment.center,
@@ -112,21 +89,64 @@ class _EngineSurface extends StatelessWidget {
   }
 }
 
-/// Embeds the native `WebKitWebView` that `linux_webview_adapter.dart`
-/// creates via `LinuxWebKitPlatformView` — the actual pixels are drawn
-/// by GTK in a `GtkFixed` layer stacked on top of the Flutter `FlView`
-/// (see `linux/runner/my_application.cc`), NOT by anything Flutter
-/// renders itself. This widget's only jobs are:
-///  1. Report this widget's on-screen rect to native every frame, so the
-///     native view visually tracks wherever Flutter's layout places it
-///     (sidebar width changes, window resizes, etc).
-///  2. Show/hide the native view on mount/unmount, so switching to a
-///     different account (which unmounts this widget) doesn't leave a
-///     stale WebKitWebView floating on top of the new content.
-///
-/// This widget itself paints nothing (fully transparent) — the visible
-/// WhatsApp Web content the user sees over this rect comes entirely from
-/// the native layer underneath.
+class _WindowsEngineSurface extends StatefulWidget {
+  const _WindowsEngineSurface({required this.handle});
+
+  final WindowsWebViewSessionHandle handle;
+
+  @override
+  State<_WindowsEngineSurface> createState() => _WindowsEngineSurfaceState();
+}
+
+class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
+    with RouteAware {
+  bool _mounted = true;
+  ModalRoute<void>? _subscribedRoute;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != _subscribedRoute) {
+      if (_subscribedRoute != null) {
+        desktopWebViewRouteObserver.unsubscribe(this);
+      }
+      _subscribedRoute = route;
+      if (route != null) {
+        desktopWebViewRouteObserver.subscribe(this, route);
+      }
+    }
+  }
+
+  @override
+  void didPushNext() {
+    if (mounted) setState(() => _mounted = false);
+  }
+
+  @override
+  void didPopNext() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _mounted = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_subscribedRoute != null) {
+      desktopWebViewRouteObserver.unsubscribe(this);
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_mounted) {
+      return const SizedBox.shrink();
+    }
+    return win.Webview(widget.handle.controller);
+  }
+}
+
 class _LinuxEngineSurface extends StatefulWidget {
   const _LinuxEngineSurface({required this.handle});
 
@@ -141,30 +161,8 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
   final _boxKey = GlobalKey();
   Timer? _geometryTimer;
 
-  // FIX (native view bleeding through Flutter dialogs/pages): previously
-  // the ONLY things that ever called setVisible() were initState()/
-  // dispose() (this widget mounting/unmounting) plus whichever call site
-  // happened to remember to wrap its navigation in `showOverlaySafely`.
-  // Both turned out to be unreliable — Settings and Add Account both hid
-  // this behind them at different points in testing. RouteAware fixes
-  // this structurally: `didPushNext()`/`didPopNext()` fire automatically
-  // for ANY route pushed/popped on top of this one, regardless of which
-  // screen did the navigating, so there's no call site left to forget.
   ModalRoute<void>? _subscribedRoute;
 
-  // FIX (typing-lag bug): the previous version called setGeometry() on
-  // EVERY timer tick unconditionally, even when nothing on screen had
-  // moved. Each call round-tripped through the MethodChannel and forced
-  // GTK to run gtk_fixed_move()/gtk_widget_set_size_request() on the
-  // WebKitWebView, which forces WebKitGTK to re-run layout on its whole
-  // page — including the contenteditable message box. Doing that 10x a
-  // second while the user is actively typing is exactly what produced
-  // the "lag saat mengetik" symptom, since every keystroke's own reflow
-  // was racing against a redundant native relayout the geometry hadn't
-  // actually asked for. We now only touch native when the rect actually
-  // changed (past a sub-pixel epsilon), which makes this a no-op the
-  // vast majority of the time (i.e. whenever the layout is stable —
-  // which is precisely when the user is typing).
   Rect? _lastSyncedRect;
   static const double _epsilon = 0.5;
 
@@ -175,11 +173,7 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
       viewId: widget.handle.accountId,
       visible: true,
     );
-    // Polling still catches window resizes / sidebar drags without having
-    // to hook every individual Flutter relayout trigger, but the interval
-    // can be relaxed (200ms is still visually seamless for a resize drag)
-    // now that idle ticks are cheap no-ops instead of forced native
-    // relayouts.
+
     _geometryTimer = Timer.periodic(
       const Duration(milliseconds: 200),
       (_) => _syncGeometry(),
@@ -190,9 +184,7 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Subscribe to whichever route currently hosts this widget. Re-runs
-    // safely if the route identity ever changes (it normally won't for
-    // this widget, but didChangeDependencies can fire more than once).
+
     final route = ModalRoute.of(context);
     if (route != _subscribedRoute) {
       if (_subscribedRoute != null) {
@@ -208,22 +200,13 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
   @override
   void didUpdateWidget(covariant _LinuxEngineSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // FIX (stale account left visible after switching): this State object
-    // can be reused for a *different* `handle` (e.g. switching accounts
-    // just changes which account is active — same widget slot, same
-    // State, only `widget.handle` changes) rather than being disposed and
-    // recreated. Previously only initState()/dispose() (mount/unmount)
-    // touched native visibility, so the OLD account's native WebView was
-    // never told to hide when this happened, and the new account's rect
-    // gets synced onto whatever was left visible underneath. Explicitly
-    // re-asserting both sides here keeps native state honest regardless
-    // of whether Flutter reused or recreated this State.
+
     if (oldWidget.handle.accountId != widget.handle.accountId) {
       LinuxWebKitPlatformView.setVisible(
         viewId: oldWidget.handle.accountId,
         visible: false,
       );
-      _lastSyncedRect = null; // force a fresh geometry sync for the new view
+      _lastSyncedRect = null;
       if (_subscribedRoute?.isCurrent ?? true) {
         LinuxWebKitPlatformView.setVisible(
           viewId: widget.handle.accountId,
@@ -234,8 +217,6 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
     }
   }
 
-  // RouteAware: another route was just pushed on top of ours — hide the
-  // native view so it can't paint over the new page/dialog.
   @override
   void didPushNext() {
     LinuxWebKitPlatformView.setVisible(
@@ -244,10 +225,6 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
     );
   }
 
-  // RouteAware: the route that was covering ours just got popped — show
-  // the native view again and force a fresh geometry sync, since its
-  // last-known rect may be stale after whatever layout changes happened
-  // while it was hidden.
   @override
   void didPopNext() {
     LinuxWebKitPlatformView.setVisible(
@@ -272,20 +249,10 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
         (rect.top - last.top).abs() < _epsilon &&
         (rect.width - last.width).abs() < _epsilon &&
         (rect.height - last.height).abs() < _epsilon) {
-      // Nothing meaningfully moved since the last sync — skip the native
-      // call entirely instead of re-issuing an identical geometry update.
       return;
     }
     _lastSyncedRect = rect;
 
-    // NOTE (unverified — no Flutter/GTK build available to test this
-    // against): assumes Flutter's logical-pixel coordinate space maps
-    // 1:1 onto the GTK widget-relative pixel space `gtk_fixed_move`
-    // expects (both should already be scaled consistently by the same
-    // GDK/device pixel ratio). If the embedded view appears offset or
-    // wrongly sized on your setup, that assumption is the first thing
-    // to check — try multiplying/dividing by
-    // `MediaQuery.of(context).devicePixelRatio` here.
     LinuxWebKitPlatformView.setGeometry(
       viewId: widget.handle.accountId,
       x: offset.dx,
@@ -310,10 +277,6 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
 
   @override
   Widget build(BuildContext context) {
-    // NotificationListener catches size changes (window resize, sidebar
-    // drag) the instant layout happens, instead of waiting for the next
-    // timer tick — keeps a resize feeling responsive even though the
-    // fallback timer above was slowed down.
     return NotificationListener<SizeChangedLayoutNotification>(
       onNotification: (_) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
@@ -324,23 +287,17 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
   }
 }
 
-/// Watches [MobileWebViewSessionHandle.shouldBeMounted] so that
-/// `unloadFromMemory()` results in an actual widget-tree removal, not
-/// just an invisible-but-still-resident WebView (see class doc above).
 class _MobileEngineSurface extends StatelessWidget {
   const _MobileEngineSurface({required this.handle});
- 
+
   final MobileWebViewSessionHandle handle;
- 
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<bool>(
       valueListenable: handle.shouldBeMounted,
       builder: (context, mounted, _) {
         if (!mounted) {
-          // Deliberately returns an empty box rather than keeping the
-          // WebViewWidget in the tree — this is the unmount that frees
-          // native memory once handle.unloadFromMemory() has run.
           return const SizedBox.shrink();
         }
         return WebViewWidget(controller: handle.controller);
@@ -348,6 +305,7 @@ class _MobileEngineSurface extends StatelessWidget {
     );
   }
 }
+
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
   @override
@@ -380,10 +338,6 @@ class _ErrorState extends StatelessWidget {
 
   final String? message;
 
-  /// True when this error is a WebView2 DispatcherQueue conflict — see
-  /// `WebView2RuntimeMissingException.isDispatcherQueueConflict`. Retrying
-  /// or reinstalling WebView2 does nothing for this specific case; only
-  /// a full process restart clears the orphaned native state.
   final bool needsAppRestart;
 
   @override

@@ -6,24 +6,6 @@ import 'package:webview_windows/webview_windows.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../domain/repositories/webview_adapter.dart';
 
-/// PRD §24 row 1 — Windows / WebView2 via `webview_flutter_windows`
-/// (maintained fork of the unmaintained `webview_windows` — see migration
-/// note at the bottom of this file for why we moved off it).
-///
-/// Isolation mechanism: `WebviewController.initializeEnvironment(
-/// userDataPath: ...)` — see IMPORTANT CAVEAT below, this is NOT the same
-/// guarantee as a fully separate WebView2 environment per account.
-///
-/// RAM wiring (§26/§27): [WindowsWebViewSessionHandle.unloadFromMemory]
-/// calls `WebviewController.dispose()`, which releases this controller's
-/// reference on the (ref-counted, shared) WebView2 environment. The
-/// environment/process itself is only actually torn down once EVERY
-/// controller sharing it has been disposed — see caveat below for why
-/// this matters for multi-account memory accounting.
-/// [pauseRendering] avoids the full teardown cost for sessions kept warm
-/// by [SessionPoolManager] but temporarily out of view, by signalling
-/// page visibility so WhatsApp Web's own background-tab JS throttling
-/// engages.
 class WindowsWebViewAdapter implements WebViewAdapter {
   @override
   WebViewEngineKind get engineKind => WebViewEngineKind.webview2;
@@ -33,10 +15,7 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     return const IsolationProbeResult(
       isSupported: true,
       engine: WebViewEngineKind.webview2,
-      // NOT full native isolation — see IMPORTANT CAVEAT in the class doc
-      // and in createOrResumeSession() below. Flagging honestly here
-      // rather than claiming a guarantee this package doesn't actually
-      // provide when multiple accounts are alive concurrently.
+
       isNativeIsolation: false,
       reason:
           'WebView2 environment (and its userDataPath) is shared and '
@@ -54,45 +33,6 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     required String accountId,
     required String sessionPath,
   }) async {
-    // IMPORTANT CAVEAT (read before relying on this for isolation):
-    // `initializeEnvironment` configures ONE shared, reference-counted
-    // WebView2 environment for the whole process. It can only be
-    // (re)configured with a different `userDataPath` while ZERO
-    // controllers are currently alive — if another account's
-    // WebviewController is still alive (e.g. kept warm by
-    // SessionPoolManager for fast switching), this throws a
-    // PlatformException instead of silently giving that account its own
-    // isolated profile. In other words: this DOES give true per-account
-    // cookie/localStorage isolation for "one account open at a time"
-    // usage, but does NOT give concurrent multi-account isolation the
-    // way separate OS processes (see linux_webview_adapter.dart) or
-    // separate user-data folders per *simultaneously running* instance
-    // would. If SessionPoolManager's warm-pool design requires more than
-    // one account's webview alive at once with guaranteed isolation,
-    // that requirement is NOT met by this package alone and needs a
-    // separate fix (e.g. serializing environment reconfiguration around
-    // pool eviction, or moving to a multi-process model like Linux's).
-    // FIX (bug: opening a 2nd account logs BOTH accounts out): this used
-    // to catch the "environment busy" PlatformException once and then
-    // silently let this controller join whatever environment/userDataPath
-    // was already active — i.e. silently SHARE the previous account's
-    // cookie/localStorage profile instead of getting its own. WhatsApp
-    // Web then sees what looks like the same session opened twice and
-    // force-logs out both sides. This happened even with
-    // SessionPoolManager capped to maxWarmSessions=1, because the
-    // previous controller's native WebView2 teardown
-    // (`WebviewController.dispose()`) completes ASYNCHRONOUSLY — the
-    // pool's fixed 500ms eviction delay is a guess, not a guarantee, and
-    // a slow teardown (fully tearing down a Chromium profile can
-    // legitimately take longer under load) meant `initializeEnvironment`
-    // for the NEW account could still race the OLD environment's
-    // teardown and silently fall back to sharing it.
-    //
-    // Now: retry with backoff instead of silently joining on the first
-    // failure. Only after genuinely exhausting retries do we give up —
-    // and even then we FAIL LOUDLY instead of silently sharing a profile,
-    // since a visible error is far better than two accounts quietly
-    // losing their WhatsApp session.
     const environmentRetryDelays = [
       Duration(milliseconds: 300),
       Duration(milliseconds: 600),
@@ -104,12 +44,30 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     Object? lastEnvironmentError;
     var environmentReady = false;
 
+    const environmentInitTimeout = Duration(seconds: 4);
+
     for (var attempt = 0; !environmentReady; attempt++) {
       try {
         await WebviewController.initializeEnvironment(
           userDataPath: sessionPath,
-        );
+        ).timeout(environmentInitTimeout);
         environmentReady = true;
+      } on TimeoutException catch (e) {
+        lastEnvironmentError = e;
+
+        if (attempt >= environmentRetryDelays.length - 1) {
+          throw WebView2RuntimeMissingException(
+            originalError: lastEnvironmentError,
+          );
+        }
+
+        print(
+          '[WindowsWebViewAdapter] WebView2 environment init timed out '
+          '(previous environment likely still tearing down) — retrying '
+          'for $accountId (attempt ${attempt + 1}/'
+          '${environmentRetryDelays.length})...',
+        );
+        await Future<void>.delayed(environmentRetryDelays[attempt]);
       } on PlatformException catch (e) {
         final detail = e.toString().toLowerCase();
         final isEnvironmentBusy =
@@ -117,21 +75,17 @@ class WindowsWebViewAdapter implements WebViewAdapter {
             (detail.contains('already') || detail.contains('alive'));
 
         if (!isEnvironmentBusy) {
-          // Something else entirely (e.g. genuinely missing WebView2
-          // Runtime) — don't retry, surface immediately.
           throw WebView2RuntimeMissingException(originalError: e);
         }
 
         lastEnvironmentError = e;
 
         if (attempt >= environmentRetryDelays.length - 1) {
-          // Exhausted retries — the previous environment genuinely never
-          // freed up in time. Fail loudly rather than silently sharing
-          // its profile with this account.
-          throw WebView2RuntimeMissingException(originalError: lastEnvironmentError);
+          throw WebView2RuntimeMissingException(
+            originalError: lastEnvironmentError,
+          );
         }
 
-        // ignore: avoid_print
         print(
           '[WindowsWebViewAdapter] WebView2 environment still torn '
           'down/switching for another account — retrying for $accountId '
@@ -142,27 +96,42 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     }
 
     final controller = WebviewController();
+    const controllerInitTimeout = Duration(seconds: 4);
 
     try {
-      await controller.initialize();
+      await controller.initialize().timeout(controllerInitTimeout);
     } on PlatformException catch (e) {
-      // webview_flutter_windows hardens the native COM/DispatcherQueue
-      // layer that caused most of the `unsupported_platform` /
-      // "Creating DispatcherQueueController failed." failures we used to
-      // see with upstream `webview_windows` (see
-      // WebView2RuntimeMissingException doc below for the history). A
-      // short retry is kept here only as a defensive fallback for
-      // genuine transient races (e.g. WebView2 Runtime not fully ready
-      // immediately after process start) — not as a workaround for a
-      // permanently orphaned native DispatcherQueue, which this package
-      // should no longer produce.
-      const retryDelays = [Duration(milliseconds: 300), Duration(milliseconds: 800)];
+      const retryDelays = [
+        Duration(milliseconds: 300),
+        Duration(milliseconds: 800),
+      ];
 
       Object? lastError = e;
       for (final delay in retryDelays) {
         await Future<void>.delayed(delay);
         try {
-          await controller.initialize();
+          await controller.initialize().timeout(controllerInitTimeout);
+          lastError = null;
+          break;
+        } catch (retryError) {
+          lastError = retryError;
+        }
+      }
+
+      if (lastError != null) {
+        throw WebView2RuntimeMissingException(originalError: lastError);
+      }
+    } on TimeoutException catch (e) {
+      const retryDelays = [
+        Duration(milliseconds: 300),
+        Duration(milliseconds: 800),
+      ];
+
+      Object? lastError = e;
+      for (final delay in retryDelays) {
+        await Future<void>.delayed(delay);
+        try {
+          await controller.initialize().timeout(controllerInitTimeout);
           lastError = null;
           break;
         } catch (retryError) {
@@ -177,7 +146,10 @@ class WindowsWebViewAdapter implements WebViewAdapter {
 
     await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
 
-    return WindowsWebViewSessionHandle(accountId: accountId, controller: controller);
+    return WindowsWebViewSessionHandle(
+      accountId: accountId,
+      controller: controller,
+    );
   }
 
   @override
@@ -185,40 +157,18 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     required String accountId,
     required String sessionPath,
   }) {
-    // Desktop processes are long-lived (PRD §14a: "koneksi tetap hidup"),
-    // so on Windows a "reload after resume" is just a normal (re)create.
-    return createOrResumeSession(accountId: accountId, sessionPath: sessionPath);
+    return createOrResumeSession(
+      accountId: accountId,
+      sessionPath: sessionPath,
+    );
   }
 }
 
-/// Dilempar saat WebView2 environment/controller gagal dibuat setelah
-/// retry. [SessionCubit]/[WebViewContainer] menampilkan [message] ini
-/// langsung ke pengguna alih-alih pesan `PlatformException` mentah yang
-/// membingungkan.
-///
-/// MIGRATION NOTE: sebelumnya kita pakai `webview_windows` (upstream
-/// `jnschulze/flutter-webview-windows`, sudah tidak aktif dikembangkan).
-/// Package itu punya bug lama di helper native-nya (`RoHelper`) seputar
-/// `CreateDispatcherQueueController` — cache-nya salah (raw pointer ke
-/// stack milik caller, bisa dangling), dan di beberapa build kami juga
-/// menemukan error native `RPC_E_WRONG_THREAD` (0x8001010E) yang
-/// dokumentasi Microsoft artikan sebagai "sudah ada DispatcherQueue di
-/// thread ini" — kemungkinan bentrok dengan compositor Impeller/ANGLE
-/// milik Flutter sendiri di thread yang sama. Alih-alih terus menambal
-/// fork yang sudah tidak terawat, kita pindah ke `webview_flutter_windows`
-/// (fork aktif oleh omar-hanafy) yang sudah "hardens the native COM and
-/// channel layers". [isDispatcherQueueConflict] tetap dipertahankan
-/// sebagai pengaman kalau-kalau gejala serupa masih muncul, tapi
-/// seharusnya sudah jauh lebih jarang (atau tidak pernah) terjadi lagi.
 class WebView2RuntimeMissingException implements Exception {
   WebView2RuntimeMissingException({required this.originalError});
 
   final Object originalError;
 
-  /// True kalau kegagalan ini masih terlihat seperti konflik
-  /// DispatcherQueue/COM tingkat native. UI (lihat `_ErrorState` di
-  /// webview_container.dart) pakai ini untuk memutuskan apakah
-  /// menampilkan tombol "Restart Aplikasi".
   bool get isDispatcherQueueConflict {
     final detail = originalError.toString().toLowerCase();
     return detail.contains('dispatcherqueue') ||
@@ -285,7 +235,10 @@ class WebView2RuntimeMissingException implements Exception {
 }
 
 class WindowsWebViewSessionHandle implements WebViewSessionHandle {
-  WindowsWebViewSessionHandle({required this.accountId, required this.controller});
+  WindowsWebViewSessionHandle({
+    required this.accountId,
+    required this.controller,
+  });
 
   @override
   final String accountId;
@@ -303,9 +256,6 @@ class WindowsWebViewSessionHandle implements WebViewSessionHandle {
   Future<void> navigateToWhatsAppWeb() async {
     _statusController.add(AccountConnectionStatus.connecting);
     await controller.loadUrl(AppConstants.whatsappWebUrl);
-    // watching WhatsApp Web's DOM (e.g. presence of the QR canvas vs. the
-    // chat list) to emit connecting/connected/disconnected accurately —
-    // WhatsApp Web has no public JS status API.
   }
 
   @override

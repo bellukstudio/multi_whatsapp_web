@@ -1,6 +1,5 @@
 import '../repositories/account_repository.dart';
 
-/// PRD §7 / §12 Rename account.
 class RenameAccount {
   RenameAccount(this._repo);
   final AccountRepository _repo;

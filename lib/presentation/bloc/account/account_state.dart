@@ -13,9 +13,9 @@ class AccountState extends Equatable {
   final List<Account> accounts;
   final String? errorMessage;
 
-  /// PRD §6.1 footer: "Status: N Connected / M Disconnected".
-  int get connectedCount =>
-      accounts.where((a) => a.status == AccountConnectionStatus.connected).length;
+  int get connectedCount => accounts
+      .where((a) => a.status == AccountConnectionStatus.connected)
+      .length;
 
   int get disconnectedCount => accounts.length - connectedCount;
 

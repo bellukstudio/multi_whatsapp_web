@@ -10,19 +10,6 @@ import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
-/// PRD §6.2 mobile layout — REDESIGNED to mirror the desktop rail concept
-/// instead of AppBar + Drawer + bottom strip. The Drawer is gone: it was
-/// a redundant second copy of the account list once the bottom strip
-/// carries every account plus Add/Settings, and desktop only has one
-/// switcher surface too. The old top `AppBar` is replaced with a slim
-/// 48dp header — same shape as desktop's `_ActiveAccountHeader` — so the
-/// two form factors read as the same app rather than two different apps.
-///
-/// Also fixes the same bug desktop had: Settings/Add Account here were
-/// still doing a bare `Navigator.push`, which never hides the native
-/// WebView overlay (it composites above Flutter's tree), so the pushed
-/// page rendered underneath it. Every navigation now goes through
-/// [showOverlaySafely], matching desktop and the existing dialog flows.
 class DashboardMobilePage extends StatefulWidget {
   const DashboardMobilePage({super.key});
 
@@ -263,16 +250,13 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
   }
 }
 
-/// Mirrors desktop's `_ActiveAccountHeader` exactly (same height, same
-/// surface/border treatment) but adds the settings action inline, since
-/// mobile has no separate rail to park it in.
 class _MobileActiveAccountHeader extends StatelessWidget {
   const _MobileActiveAccountHeader({
     required this.account,
     required this.onOpenSettings,
   });
 
-  final dynamic account; // Account?
+  final dynamic account;
   final VoidCallback onOpenSettings;
 
   @override

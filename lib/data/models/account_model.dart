@@ -1,4 +1,3 @@
-
 import 'package:isar_community/isar.dart';
 
 import '../../core/constants/app_constants.dart';
@@ -6,16 +5,12 @@ import '../../domain/entities/account.dart';
 
 part 'account_model.g.dart';
 
-/// Isar collection for persisted account metadata (PRD §19 Local Storage
-/// Data Model). Only metadata lives here — actual WhatsApp Web session
-/// data (cookies/localStorage/IndexedDB) is owned by the native WebView
-/// engine's own isolated profile on disk (PRD §24), not by this DB.
 @collection
 class AccountModel {
   Id isarId = Isar.autoIncrement;
 
   @Index(unique: true, replace: true)
-  late String accountId; // uuid, matches Account.id
+  late String accountId;
 
   late String name;
 
@@ -29,15 +24,15 @@ class AccountModel {
   late int orderIndex;
 
   Account toEntity() => Account(
-        id: accountId,
-        name: name,
-        status: status.toDomain(),
-        sessionPath: sessionPath,
-        createdAt: createdAt,
-        lastConnectedAt: lastConnectedAt,
-        avatarColorSeed: avatarColorSeed,
-        orderIndex: orderIndex,
-      );
+    id: accountId,
+    name: name,
+    status: status.toDomain(),
+    sessionPath: sessionPath,
+    createdAt: createdAt,
+    lastConnectedAt: lastConnectedAt,
+    avatarColorSeed: avatarColorSeed,
+    orderIndex: orderIndex,
+  );
 
   static AccountModel fromEntity(Account a) => AccountModel()
     ..accountId = a.id
@@ -50,8 +45,6 @@ class AccountModel {
     ..orderIndex = a.orderIndex;
 }
 
-/// Mirrors [AccountConnectionStatus] but kept as its own DB-facing enum so
-/// the domain enum can evolve without an Isar schema migration headache.
 enum AccountStatusDb { connecting, connected, disconnected, loggedOut, error }
 
 extension AccountStatusDbX on AccountStatusDb {

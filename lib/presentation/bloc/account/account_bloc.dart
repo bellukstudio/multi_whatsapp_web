@@ -14,9 +14,6 @@ import '../../../domain/usecases/rename_account.dart';
 part 'account_event.dart';
 part 'account_state.dart';
 
-/// Drives the account list shown in both the desktop sidebar (§6.1) and
-/// the mobile switcher/drawer (§6.2) — one BLoC, two renderings, per the
-/// "domain/business logic tetap platform-agnostic" rule in §10.
 class AccountBloc extends Bloc<AccountEvent, AccountState> {
   AccountBloc({
     required WatchAccounts watchAccounts,
@@ -24,12 +21,12 @@ class AccountBloc extends Bloc<AccountEvent, AccountState> {
     required RenameAccount renameAccount,
     required DeleteAccount deleteAccount,
     required LogoutAccount logoutAccount,
-  })  : _watchAccounts = watchAccounts,
-        _addAccount = addAccount,
-        _renameAccount = renameAccount,
-        _deleteAccount = deleteAccount,
-        _logoutAccount = logoutAccount,
-        super(const AccountState()) {
+  }) : _watchAccounts = watchAccounts,
+       _addAccount = addAccount,
+       _renameAccount = renameAccount,
+       _deleteAccount = deleteAccount,
+       _logoutAccount = logoutAccount,
+       super(const AccountState()) {
     on<AccountsSubscriptionRequested>(_onSubscriptionRequested);
     on<_AccountsUpdated>(_onAccountsUpdated);
     on<AccountAdded>(_onAccountAdded);
@@ -54,10 +51,8 @@ class AccountBloc extends Bloc<AccountEvent, AccountState> {
     await _sub?.cancel();
     await emit.forEach<List<Account>>(
       _watchAccounts(),
-      onData: (accounts) => state.copyWith(
-        status: AccountsStatus.ready,
-        accounts: accounts,
-      ),
+      onData: (accounts) =>
+          state.copyWith(status: AccountsStatus.ready, accounts: accounts),
       onError: (error, __) => state.copyWith(
         status: AccountsStatus.failure,
         errorMessage: error.toString(),
@@ -66,7 +61,9 @@ class AccountBloc extends Bloc<AccountEvent, AccountState> {
   }
 
   void _onAccountsUpdated(_AccountsUpdated event, Emitter<AccountState> emit) {
-    emit(state.copyWith(status: AccountsStatus.ready, accounts: event.accounts));
+    emit(
+      state.copyWith(status: AccountsStatus.ready, accounts: event.accounts),
+    );
   }
 
   Future<void> _onAccountAdded(
@@ -75,8 +72,6 @@ class AccountBloc extends Bloc<AccountEvent, AccountState> {
   ) async {
     try {
       await _addAccount(name: event.name);
-      // No manual state update needed — the watchAccounts() stream
-      // (Isar .watch()) will emit the new list automatically.
     } catch (e) {
       emit(state.copyWith(status: AccountsStatus.failure, errorMessage: '$e'));
     }

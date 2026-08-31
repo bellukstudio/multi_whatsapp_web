@@ -1,9 +1,6 @@
 import '../repositories/account_repository.dart';
 import '../repositories/webview_adapter.dart';
 
-/// PRD §12: logs an account out of WhatsApp Web (clears cookies /
-/// localStorage / IndexedDB for that isolated profile) but keeps the
-/// account entry so the user can re-scan a QR later.
 class LogoutAccount {
   LogoutAccount(this._repo, this._webViewAdapter);
 

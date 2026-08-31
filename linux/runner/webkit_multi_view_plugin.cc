@@ -139,7 +139,7 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
   //    applied before realize.
   WebKitSettings* webkit_settings = webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview));
   webkit_settings_set_hardware_acceleration_policy(
-      webkit_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND);
+      webkit_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
   webkit_settings_set_enable_smooth_scrolling(webkit_settings, TRUE);
   webkit_settings_set_enable_page_cache(webkit_settings, TRUE);
   // DIAGNOSTIC (temporary — turn back to FALSE once done): enabled so

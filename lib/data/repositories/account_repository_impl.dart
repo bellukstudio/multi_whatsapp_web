@@ -6,12 +6,6 @@ import '../../domain/repositories/account_repository.dart';
 import '../datasources/local/account_local_datasource.dart';
 import '../models/account_model.dart';
 
-/// Concrete [AccountRepository]. Talks to Isar via
-/// [AccountLocalDataSource] for metadata, and tracks the single
-/// "active account" id in memory (broadcast via [watchActiveAccountId])
-/// since that's pure UI-session state, not something that needs to
-/// survive a full app restart the same way account metadata does
-/// (PRD §11 handles restart/resume separately, at the WebView layer).
 class AccountRepositoryImpl implements AccountRepository {
   AccountRepositoryImpl(this._local);
 
@@ -22,7 +16,9 @@ class AccountRepositoryImpl implements AccountRepository {
 
   @override
   Stream<List<Account>> watchAccounts() {
-    return _local.watchAll().map((models) => models.map((m) => m.toEntity()).toList());
+    return _local.watchAll().map(
+      (models) => models.map((m) => m.toEntity()).toList(),
+    );
   }
 
   @override
@@ -47,7 +43,10 @@ class AccountRepositoryImpl implements AccountRepository {
   }
 
   @override
-  Future<void> renameAccount({required String id, required String newName}) async {
+  Future<void> renameAccount({
+    required String id,
+    required String newName,
+  }) async {
     final model = await _local.getById(id);
     if (model == null) return;
     model.name = newName;
@@ -69,11 +68,6 @@ class AccountRepositoryImpl implements AccountRepository {
       _activeAccountId = null;
       _activeAccountController.add(null);
     }
-    // NOTE: this repository only removes metadata. The caller (use case /
-    // session controller) is responsible for also calling
-    // WebViewAdapter -> clearSessionData()/dispose() on the associated
-    // WebViewSessionHandle BEFORE calling this, so persisted session
-    // files on disk are removed too (PRD §25 — no orphaned session data).
   }
 
   @override

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/desktop_page_route.dart';
 import '../../../core/utils/webview_safe_overlay.dart';
 import '../../../domain/entities/account.dart';
 import '../../bloc/account/account_bloc.dart';
@@ -11,15 +12,6 @@ import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
-
-/// IMPORTANT (bug fix): every navigation triggered from here — Settings,
-/// Add Account, rename/delete dialogs — now goes through
-/// [showOverlaySafely]. The native WebKitGTK/webview_windows surface is
-/// composited *above* Flutter's own widget tree, so a bare
-/// `Navigator.push` never actually hides it — the new page/dialog would
-/// render underneath the still-visible WebView and look "cut off".
-/// Previously only the account rename/delete flow did this; Settings and
-/// Add Account did not, which was the reported bug.
 class DashboardDesktopPage extends StatelessWidget {
   const DashboardDesktopPage({super.key});
 
@@ -47,18 +39,17 @@ class DashboardDesktopPage extends StatelessWidget {
                     onSelect: (a) => context.read<SessionCubit>().switchTo(a),
                     onAdd: () => showOverlaySafely(
                       sessionState.handle,
-                      () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const AddAccountPage(),
-                        ),
-                      ),
+                      () => Navigator.of(
+                        context,
+                      ).push(desktopPageRoute((_) => const AddAccountPage())),
                     ),
                     onOpenSettings: () => showOverlaySafely(
                       sessionState.handle,
                       () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const SettingsPage(formFactor: FormFactor.desktop),
+                        desktopPageRoute(
+                          (_) => const SettingsPage(
+                            formFactor: FormFactor.desktop,
+                          ),
                         ),
                       ),
                     ),
@@ -66,12 +57,7 @@ class DashboardDesktopPage extends StatelessWidget {
                       sessionState.handle,
                       () => _showRenameDialog(context, a.id, a.name),
                     ),
-                    // onLogout: (a) {
-                    //   context.read<SessionCubit>().releaseAccount(a.id);
-                    //   context.read<AccountBloc>().add(
-                    //     AccountLoggedOut(a.id),
-                    //   );
-                    // },
+
                     onDelete: (a) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         showOverlaySafely(
@@ -166,11 +152,6 @@ class DashboardDesktopPage extends StatelessWidget {
   }
 }
 
-/// Slim inline header above the WebView — replaces the old full-width
-/// Material AppBar. Just the active account's name (so you always know
-/// which session you're looking at) plus a reload affordance; everything
-/// else (adding accounts, settings) now lives in the rail instead of
-/// competing for space up here.
 class _ActiveAccountHeader extends StatelessWidget {
   const _ActiveAccountHeader({required this.account});
 

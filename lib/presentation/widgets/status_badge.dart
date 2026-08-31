@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/constants/app_constants.dart';
 
-/// PRD §6.1/§6.2/§13 — the colored dot next to each account (🟢/🔴 in
-/// the PRD's ASCII mockups).
 class StatusBadge extends StatelessWidget {
   const StatusBadge({super.key, required this.status, this.size = 10});
 

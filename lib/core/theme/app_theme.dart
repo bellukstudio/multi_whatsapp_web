@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 
-/// PRD §2 / §16: dark/light theme, applied identically on desktop and
-/// mobile (only the layout differs, per §6.1/§6.2 — not the palette).
 class AppTheme {
   AppTheme._();
 
-  static const _seed = Color(0xFF25D366); // WhatsApp-adjacent green
+  static const _seed = Color(0xFF25D366);
 
   static ThemeData light() {
     return ThemeData(
@@ -31,8 +29,6 @@ class AppTheme {
     );
   }
 
-  /// Deterministic avatar color from [Account.avatarColorSeed] (PRD §6 —
-  /// consistent color per account across sidebar/switcher/drawer).
   static Color avatarColorFor(int? seed) {
     const palette = [
       Color(0xFF25D366),

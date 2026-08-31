@@ -5,11 +5,6 @@ import '../../core/theme/app_theme.dart';
 import '../../domain/entities/account.dart';
 import '../../domain/repositories/webview_adapter.dart';
 
-/// Restyled to match desktop's `_AccountRailTile`: rounded-square
-/// selection highlight instead of an underline, and the status dot uses
-/// the same size/border treatment as the rail. Visually this is the
-/// desktop rail rotated 90° into a bottom strip, so switching between
-/// mobile and desktop feels like the same control.
 class AccountSwitcherBottom extends StatelessWidget {
   const AccountSwitcherBottom({
     super.key,
@@ -115,9 +110,6 @@ class _StripActionButton extends StatelessWidget {
   }
 }
 
-/// Same visual language as desktop's `_AccountRailTile`: rounded-square
-/// selection background, avatar, and a status dot cut out of the strip
-/// background rather than a plain underline.
 class _AccountStripTile extends StatelessWidget {
   const _AccountStripTile({
     required this.account,
@@ -179,7 +171,9 @@ class _AccountStripTile extends StatelessWidget {
                     radius: 18,
                     backgroundColor: avatarColor,
                     child: Text(
-                      account.name.isNotEmpty ? account.name[0].toUpperCase() : '?',
+                      account.name.isNotEmpty
+                          ? account.name[0].toUpperCase()
+                          : '?',
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w600,

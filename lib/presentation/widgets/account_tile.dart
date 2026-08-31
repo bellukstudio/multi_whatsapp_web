@@ -4,9 +4,6 @@ import '../../core/theme/app_theme.dart';
 import '../../domain/entities/account.dart';
 import 'status_badge.dart';
 
-/// Shared visual for one account row/chip. Used by the desktop sidebar
-/// list AND the mobile drawer list (PRD §6.1/§6.2 both list accounts with
-/// name + status) — only the container around it differs.
 class AccountTile extends StatelessWidget {
   const AccountTile({
     super.key,
@@ -20,7 +17,7 @@ class AccountTile extends StatelessWidget {
   final Account account;
   final bool selected;
   final VoidCallback onTap;
-  final VoidCallback? onLongPress; // PRD §12: long-press context menu (mobile)
+  final VoidCallback? onLongPress;
   final bool dense;
 
   @override

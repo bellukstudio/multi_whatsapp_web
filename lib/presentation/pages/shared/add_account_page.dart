@@ -3,13 +3,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../bloc/account/account_bloc.dart';
 
-/// PRD §7 Add WhatsApp Account.
-///
-/// Note: the QR code itself is rendered by web.whatsapp.com *inside* the
-/// isolated WebView once navigation happens — this screen only collects
-/// the account's display name, then the caller creates the account +
-/// activates its session (see SessionCubit.switchTo), after which the
-/// WebViewContainer shows the live QR.
 class AddAccountPage extends StatefulWidget {
   const AddAccountPage({super.key});
 
@@ -56,7 +49,10 @@ class _AddAccountPageState extends State<AddAccountPage> {
                 onFieldSubmitted: (_) => _submit(),
               ),
               const SizedBox(height: 16),
-              FilledButton(onPressed: _submit, child: const Text('Continue to QR scan')),
+              FilledButton(
+                onPressed: _submit,
+                child: const Text('Continue to QR scan'),
+              ),
               const SizedBox(height: 8),
               const Text(
                 'On the next screen, scan the QR code with WhatsApp on your '

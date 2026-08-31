@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:io' show Platform;
 
@@ -6,60 +7,44 @@ import 'package:multi_whatsapp_web/core/utils/memory_profiler.dart';
 import 'package:multi_whatsapp_web/domain/entities/account.dart';
 import 'package:multi_whatsapp_web/domain/repositories/webview_adapter.dart';
 
-/// Desktop-only session pool with a soft LRU cap (PRD §26: "10 akun:
-/// tidak crash, resource dimonitor" — read as "don't let 10 open accounts
-/// mean 10 fully-rendering WebViews forever").
-///
-/// Policy:
-///   - Up to [maxWarmSessions] accounts may have a live WebView at once.
-///   - The currently *visible* account is always kept fully active.
-///   - Other warm accounts are [WebViewAdapter.pauseRendering]'d (cheap —
-///     keeps cookies/DOM state, throttles JS) rather than unloaded.
-///   - When a session beyond the cap is requested, the Least Recently
-///     Used warm session is evicted via [WebViewAdapter.unloadFromMemory]
-///     + [WebViewSessionHandle.dispose] before the new one is created.
-///
-/// Mobile does NOT use this pool — [SessionCubit] talks to the adapter
-/// directly there, since §27 mandates at most one warm session, period.
 class SessionPoolManager {
   SessionPoolManager({
     required WebViewAdapter webViewAdapter,
     int? maxWarmSessions,
+    Duration? idleEvictionTimeout,
+    Duration? idleSweepInterval,
   }) : _adapter = webViewAdapter,
        _maxWarmSessions =
-           maxWarmSessions ?? AppConstants.maxRecommendedDesktopSessions;
+           maxWarmSessions ?? AppConstants.maxRecommendedDesktopSessions,
+       _idleEvictionTimeout =
+           idleEvictionTimeout ?? const Duration(minutes: 10) {
+    final interval =
+        idleSweepInterval ??
+        Duration(
+          seconds: (_idleEvictionTimeout.inSeconds / 2).clamp(30, 300).toInt(),
+        );
+    _idleSweepTimer = Timer.periodic(interval, (_) => _sweepIdleSessions());
+  }
 
   final WebViewAdapter _adapter;
   final int _maxWarmSessions;
+  final Duration _idleEvictionTimeout;
+  late final Timer _idleSweepTimer;
 
-  /// LinkedHashMap preserves insertion order; we re-insert on access to
-  /// get cheap LRU-order tracking (oldest = least recently used = first).
   final LinkedHashMap<String, WebViewSessionHandle> _warm =
       LinkedHashMap<String, WebViewSessionHandle>();
 
+  final Map<String, DateTime> _pausedSince = {};
+
   String? _activeAccountId;
 
-  /// Serializes [acquire] calls so two overlapping calls (e.g. the user
-  /// tapping two different accounts before the first switch has finished)
-  /// can never both pass the `_warm.length >= _maxWarmSessions` check
-  /// before either has updated [_warm]. Without this, two concurrent
-  /// `createOrResumeSession` calls can both reach
-  /// `WebviewController.initialize()` at the same time — on Windows that
-  /// means two `DispatcherQueueController`s on one thread, which is
-  /// exactly what produces `PlatformException(unsupported_platform, "The
-  /// platform is not supported")` (webview_windows only allows one; see
-  /// the FIX note in SessionCubit / jnschulze/flutter-webview-windows#119).
   Future<void> _lock = Future<void>.value();
 
   int get warmCount => _warm.length;
 
-  /// Makes [account] the active, fully-rendering session. Evicts the LRU
-  /// warm session first if the pool is at capacity and [account] isn't
-  /// already warm.
   Future<WebViewSessionHandle> acquire(Account account) {
     final result = _lock.then((_) => _acquireLocked(account));
-    // Keep the chain alive even if this acquire failed, so the *next*
-    // caller still waits for it instead of racing it.
+
     _lock = result.then((_) {}, onError: (_) {});
     return result;
   }
@@ -67,12 +52,18 @@ class SessionPoolManager {
   Future<WebViewSessionHandle> _acquireLocked(Account account) async {
     final previousActiveId = _activeAccountId;
 
+    print(
+      '[SessionPoolManager] acquire(${account.id}) — warmCount=${_warm.length} '
+      '(cap=$_maxWarmSessions), already warm=${_warm.containsKey(account.id)}, '
+      'warm ids=${_warm.keys.toList()}',
+    );
+
     if (_warm.containsKey(account.id)) {
-      // Already warm — just promote to MRU and resume full rendering.
       final handle = _warm.remove(account.id)!;
-      _warm[account.id] = handle; // re-insert = move to MRU end
+      _warm[account.id] = handle;
       await handle.resumeRendering();
       _activeAccountId = account.id;
+      _pausedSince.remove(account.id);
       await _pauseIfStillWarm(previousActiveId);
       return handle;
     }
@@ -88,9 +79,16 @@ class SessionPoolManager {
         sessionPath: account.sessionPath,
       ),
     );
-    await handle.navigateToWhatsAppWeb();
+
     _warm[account.id] = handle;
     _activeAccountId = account.id;
+    _pausedSince.remove(account.id);
+
+    try {
+      await handle.navigateToWhatsAppWeb();
+    } catch (e) {
+      rethrow;
+    }
 
     await _pauseIfStillWarm(previousActiveId);
     return handle;
@@ -101,53 +99,56 @@ class SessionPoolManager {
     final handle = _warm[accountId];
     if (handle != null) {
       await handle.pauseRendering();
+      _pausedSince[accountId] = DateTime.now();
+    }
+  }
+
+  Future<void> _sweepIdleSessions() async {
+    final now = DateTime.now();
+    final idleIds = _pausedSince.entries
+        .where((e) => now.difference(e.value) >= _idleEvictionTimeout)
+        .map((e) => e.key)
+        .toList(growable: false);
+
+    for (final id in idleIds) {
+      if (id == _activeAccountId) {
+        _pausedSince.remove(id);
+        continue;
+      }
+      final handle = _warm.remove(id);
+      _pausedSince.remove(id);
+      if (handle == null) continue;
+      await MemoryProfiler.logAround(
+        'idle-unload session $id (paused >= ${_idleEvictionTimeout.inMinutes}m)',
+        () async {
+          await handle.unloadFromMemory();
+          await handle.dispose();
+        },
+      );
     }
   }
 
   Future<void> _evictLeastRecentlyUsed() async {
     if (_warm.isEmpty) return;
-    final lruId = _warm.keys.first; // first-inserted = least recently used
-    if (lruId == _activeAccountId) {
-      // Shouldn't normally happen (active is always MRU), but guard
-      // against evicting the visible session.
-      return;
-    }
+    final lruId = _warm.keys.first;
+
     final handle = _warm.remove(lruId);
+    _pausedSince.remove(lruId);
     if (handle != null) {
       await MemoryProfiler.logAround('evict LRU session $lruId', () async {
         await handle.unloadFromMemory();
         await handle.dispose();
       });
-      // WORKAROUND: on Windows, WebviewController.dispose() tears down
-      // the native WebView2 environment/process *asynchronously* — the
-      // awaited Future above can resolve before that teardown is
-      // actually done. Creating the next WebviewController (and
-      // reconfiguring the shared environment to the new account's
-      // userDataPath) immediately after can still race the previous
-      // one's cleanup.
-      //
-      // BUG THIS CAUSED (fixed alongside this delay bump): when the
-      // race was lost, windows_webview_adapter.dart used to silently let
-      // the new account join the OLD (not-yet-torn-down) environment
-      // instead of failing — i.e. two accounts would silently share one
-      // WhatsApp Web cookie/localStorage profile, which WhatsApp Web
-      // then treats as the same session opened twice and force-logs out
-      // BOTH sides. windows_webview_adapter.dart now retries with
-      // backoff (up to ~5.4s total) instead of silently sharing, so a
-      // slow teardown here just means a slightly slower switch, not a
-      // silent data-isolation bug. This delay is a first line of
-      // defense to make that retry path rarely needed in practice, not
-      // the only thing preventing the bug anymore.
+
       if (Platform.isWindows) {
         await Future<void>.delayed(const Duration(milliseconds: 1200));
       }
     }
   }
 
-  /// Optional explicit eviction, e.g. when an account is deleted (§12) —
-  /// don't wait for LRU pressure to release its memory.
   Future<void> evict(String accountId) async {
     final handle = _warm.remove(accountId);
+    _pausedSince.remove(accountId);
     if (handle == null) return;
     await handle.unloadFromMemory();
     await handle.dispose();
@@ -160,6 +161,11 @@ class SessionPoolManager {
       await handle.dispose();
     }
     _warm.clear();
+    _pausedSince.clear();
     _activeAccountId = null;
+  }
+
+  void dispose() {
+    _idleSweepTimer.cancel();
   }
 }

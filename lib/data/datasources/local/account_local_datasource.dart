@@ -4,9 +4,6 @@ import 'package:uuid/uuid.dart';
 
 import '../../models/account_model.dart';
 
-/// Owns the Isar instance + raw CRUD for [AccountModel]. This is the only
-/// place in the app that talks Isar directly — everything above this
-/// (repository impl) works with domain [Account] entities.
 class AccountLocalDataSource {
   AccountLocalDataSource(this._isar);
 
@@ -24,10 +21,9 @@ class AccountLocalDataSource {
   }
 
   Stream<List<AccountModel>> watchAll() {
-    return _isar.accountModels
-        .where()
-        .sortByOrderIndex()
-        .watch(fireImmediately: true);
+    return _isar.accountModels.where().sortByOrderIndex().watch(
+      fireImmediately: true,
+    );
   }
 
   Future<List<AccountModel>> getAll() =>
@@ -36,19 +32,13 @@ class AccountLocalDataSource {
   Future<AccountModel?> getById(String accountId) =>
       _isar.accountModels.filter().accountIdEqualTo(accountId).findFirst();
 
-  /// PRD §7/§9: creates the metadata row AND reserves a fresh, never-reused
-  /// uuid used as the WebView isolation key (PRD §24/§25) — this id is the
-  /// thing that must never collide across accounts, unlike [name] which is
-  /// just a user-facing label.
   Future<AccountModel> create({required String name}) async {
     final existingCount = await _isar.accountModels.count();
     final model = AccountModel()
       ..accountId = _uuid.v4()
       ..name = name
       ..status = AccountStatusDb.disconnected
-      ..sessionPath = 'sessions/${_uuid.v4()}' // relative; resolved by
-      // the WebView adapter into a real sandbox/app-support path per
-      // platform (desktop: free folder; mobile: app sandbox, PRD §8-9).
+      ..sessionPath = 'sessions/${_uuid.v4()}'
       ..createdAt = DateTime.now()
       ..orderIndex = existingCount;
 
@@ -62,7 +52,8 @@ class AccountLocalDataSource {
 
   Future<void> delete(String accountId) async {
     await _isar.writeTxn(
-      () => _isar.accountModels.filter().accountIdEqualTo(accountId).deleteAll(),
+      () =>
+          _isar.accountModels.filter().accountIdEqualTo(accountId).deleteAll(),
     );
   }
 

@@ -20,35 +20,12 @@ import 'presentation/bloc/session/session_pool_manager.dart';
 import 'presentation/bloc/theme/theme_cubit.dart';
 import 'presentation/responsive/responsive_layout.dart';
 
-/// FIX (native WebView bleeding through Flutter dialogs/pages): the
-/// desktop native WebView surfaces (WebKitGTK on Linux, and similarly
-/// webview_windows on Windows) are composited ABOVE the entire Flutter
-/// `FlView` — a plain `Navigator.push`/`showDialog` never actually
-/// covers them, because Flutter has no idea a separate native widget
-/// exists on top of it at all. The previous fix for this
-/// (`showOverlaySafely`, calling pauseRendering()/resumeRendering()
-/// imperatively at each navigation call site) turned out to be too easy
-/// to miss or get wrong — Settings and Add Account both slipped through
-/// at different points.
-///
-/// This `RouteObserver` is the structural fix: any widget that mixes in
-/// `RouteAware` and subscribes to it (see `_LinuxEngineSurfaceState` in
-/// `webview_container.dart`) automatically gets `didPushNext()` /
-/// `didPopNext()` callbacks whenever ANY route is pushed/popped on top
-/// of its own route — no matter which screen does the navigating, and
-/// with no risk of a call site forgetting to wrap itself. The native
-/// view hides/shows itself; nothing else needs to remember to ask it to.
 final RouteObserver<ModalRoute<void>> desktopWebViewRouteObserver =
     RouteObserver<ModalRoute<void>>();
 
 class MultiWhatsAppWebApp extends StatelessWidget {
   const MultiWhatsAppWebApp({super.key, required this.formFactor});
 
-  /// Determined once at startup in main.dart via `Platform.isX`
-  /// (desktop OSes vs Android/iOS) per PRD §6.1 vs §6.2. The
-  /// [ResponsiveLayout] widget additionally re-derives this from window
-  /// width for dev-time previewing, but session-lifecycle rules (§27)
-  /// key off this authoritative value, not window size.
   final FormFactor formFactor;
 
   @override
@@ -70,14 +47,7 @@ class MultiWhatsAppWebApp extends StatelessWidget {
             webViewAdapter: getIt<WebViewAdapter>(),
             accountRepository: getIt<AccountRepository>(),
             formFactor: formFactor,
-            // Windows only ever keeps ONE WebviewController alive at a
-            // time (see windows_webview_adapter.dart) — a second
-            // concurrently-warm controller is what caused the
-            // "Creating DispatcherQueueController failed" crash.
-            // Capping the warm pool at 1 here makes SessionPoolManager
-            // fully dispose the previous session before creating the
-            // next one, instead of trying to keep several warm side by
-            // side. Other desktop platforms keep the full §26 cap.
+
             poolManager: formFactor == FormFactor.desktop && Platform.isWindows
                 ? SessionPoolManager(
                     webViewAdapter: getIt<WebViewAdapter>(),
