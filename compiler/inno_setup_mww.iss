@@ -56,9 +56,9 @@ Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\flutter_secure_s
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\flutter_windows.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\isar_community_flutter_libs_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\libisar.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\compiler\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\compiler\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\compiler\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\webview_windows_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
