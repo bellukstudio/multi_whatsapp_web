@@ -71,7 +71,12 @@ class DashboardDesktopPage extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _ActiveAccountHeader(account: activeAccount),
+                        _ActiveAccountHeader(
+                          account: activeAccount,
+                          canReload: sessionState.handle != null,
+                          onReload: () =>
+                              context.read<SessionCubit>().reloadActive(),
+                        ),
                         Expanded(
                           child: WebViewContainer(
                             account: activeAccount,
@@ -153,9 +158,15 @@ class DashboardDesktopPage extends StatelessWidget {
 }
 
 class _ActiveAccountHeader extends StatelessWidget {
-  const _ActiveAccountHeader({required this.account});
+  const _ActiveAccountHeader({
+    required this.account,
+    required this.canReload,
+    required this.onReload,
+  });
 
   final Account? account;
+  final bool canReload;
+  final VoidCallback onReload;
 
   @override
   Widget build(BuildContext context) {
@@ -182,6 +193,15 @@ class _ActiveAccountHeader extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (canReload)
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 20),
+              tooltip:
+                  'Reload this account\n'
+                  '(reclaims memory built up over a long session — '
+                  'not a logout)',
+              onPressed: onReload,
+            ),
         ],
       ),
     );

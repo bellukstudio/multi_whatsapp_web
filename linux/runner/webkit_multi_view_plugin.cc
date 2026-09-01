@@ -80,6 +80,21 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
     return FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(TRUE)));
   }
 
+  // REVERTED: a webkit_website_data_manager_set_memory_pressure_settings()
+  // call with a 320MB memory_limit was tried here to rein in
+  // WebKitWebProcess memory. Measured result on real usage: memory went
+  // UP (1.1GB -> 1.4GB), not down, with the same accounts open. Best
+  // explanation: `memory_limit` isn't a hard cap — it's the baseline
+  // WebKit's internal conservative/strict/kill thresholds are computed
+  // against, and WhatsApp Web's own JS/DOM footprint legitimately needs
+  // more than 320MB just to run. Set too low, the WebProcess likely hit
+  // "conservative"/"strict" pressure constantly and kept evicting +
+  // immediately re-decoding/re-allocating the same resources — that
+  // repeated churn fragments the heap and can push RSS higher than just
+  // leaving the cache alone. Not re-adding this without being able to
+  // tune the limit against real, measured steady-state usage on the
+  // actual machine.
+
   g_autoptr(WebKitWebsiteDataManager) data_manager = webkit_website_data_manager_new(
       "base-data-directory", data_dir.c_str(),
       "base-cache-directory", data_dir.c_str(),
@@ -101,6 +116,19 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
   // per-account cookie/storage isolation above, which is a completely
   // separate mechanism (WebKitWebsiteDataManager).
   webkit_web_context_set_sandbox_enabled(web_context, FALSE);
+
+  // FIX (bug: WebKitWebProcess ballooning to ~1GB per account): no
+  // cache model was ever set, so WebKitGTK defaulted to
+  // WEBKIT_CACHE_MODEL_WEB_BROWSER — a cache budget sized for someone
+  // browsing many different sites/tabs (large in-memory object cache,
+  // large page-cache budget, etc). This WebView only ever shows ONE
+  // page (web.whatsapp.com) for the life of the process —
+  // WEBKIT_CACHE_MODEL_DOCUMENT_VIEWER is the model WebKit itself
+  // recommends for exactly that shape of usage, and cuts the in-memory
+  // cache footprint dramatically. (See the memory-pressure-settings
+  // block above for the other big contributor to the same bug.)
+  webkit_web_context_set_cache_model(web_context,
+                                      WEBKIT_CACHE_MODEL_DOCUMENT_VIEWER);
 
   GtkWidget* webview = webkit_web_view_new_with_context(web_context);
 
@@ -127,30 +155,40 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
   //    Flutter Linux embedder's own EGL/GLES context in the same
   //    process and crashed the whole app (`eglMakeCurrent failed` ->
   //    `FlutterEngineRemoveView` -> lost connection to device).
-  //  - ON_DEMAND (current): re-tried after fixing the settings-before-
-  //    show() ordering bug above. NEVER (previously used to work around
-  //    the eglMakeCurrent crash) turned out to also disable GPU
-  //    acceleration for WhatsApp Web's OWN client-side canvas-based
-  //    image compression step that runs before every attachment upload
-  //    — which is why sending images/documents got very slow even for
-  //    small files. Since the ordering bug (not the ON_DEMAND value
-  //    itself) is believed to have been the real cause of the earlier
-  //    crash, ON_DEMAND is worth retesting now that settings are
-  //    applied before realize.
+  //  - ON_DEMAND (current — being retried specifically for memory):
+  //    NEVER forces ALL rendering, including every image/thumbnail/
+  //    video-frame WhatsApp Web decodes, through software (CPU)
+  //    rasterization — meaning every one of those has to sit in system
+  //    RAM as a raw decoded bitmap instead of a compact GPU texture.
+  //    For a media-heavy page like WhatsApp Web, this is a very
+  //    plausible major contributor to the ~1GB-per-account
+  //    WebKitWebProcess memory that prompted this investigation. Per
+  //    the note above, the ordering bug (not ON_DEMAND itself) is
+  //    believed to have been the real cause of the earlier
+  //    `eglMakeCurrent failed` crash, and that bug is now fixed
+  //    (settings applied before widget realize). If that crash message
+  //    reappears in the terminal (or the whole app loses its connection
+  //    to the display), revert this single line back to
+  //    WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER immediately — that
+  //    would mean the ordering theory was wrong, not just incomplete.
   WebKitSettings* webkit_settings = webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview));
   webkit_settings_set_hardware_acceleration_policy(
-      webkit_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
+      webkit_settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND);
   webkit_settings_set_enable_smooth_scrolling(webkit_settings, TRUE);
-  webkit_settings_set_enable_page_cache(webkit_settings, TRUE);
-  // DIAGNOSTIC (temporary — turn back to FALSE once done): enabled so
-  // the user can right-click the WhatsApp Web view -> "Inspect Element"
-  // and use Web Inspector's Network/Console tabs to see exactly what's
-  // taking ~5s after clicking send on an attachment (small files too,
-  // so it's not upload bandwidth). Nothing in the Dart/native code here
-  // has any 5s delay, so the cause is inside WhatsApp Web's own JS or a
-  // network round-trip — Web Inspector is the only way to actually see
-  // which request/script is responsible instead of guessing further.
-  webkit_settings_set_enable_developer_extras(webkit_settings, TRUE);
+  // FIX (memory): was TRUE. Page/back-forward cache exists to make
+  // switching BETWEEN distinct pages instant by keeping fully-rendered
+  // previous pages resident in memory. WhatsApp Web is a single-page
+  // app that never navigates to a different page for the life of the
+  // session, so this was pure overhead with no benefit here — one more
+  // contributor to the ~1GB-per-account WebKitWebProcess memory usage.
+  webkit_settings_set_enable_page_cache(webkit_settings, FALSE);
+  // DIAGNOSTIC flag from an earlier attachment-upload-speed investigation
+  // — turned back OFF now that it's done. Left TRUE, this keeps Web
+  // Inspector's supporting structures resident in every WebProcess for
+  // no reason, which was also feeding the high per-account memory usage
+  // reported via system monitor. Re-enable only temporarily, per-account,
+  // when actually debugging with Inspect Element.
+  webkit_settings_set_enable_developer_extras(webkit_settings, FALSE);
   webkit_settings_set_enable_write_console_messages_to_stdout(webkit_settings, FALSE);
   // NOTE (reverted — do not re-add): a Chrome-spoofed User-Agent was
   // tried here to stop WhatsApp Web's UA sniffing from reporting

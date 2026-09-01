@@ -114,6 +114,21 @@ class SessionCubit extends Cubit<SessionState> {
     return handle;
   }
 
+  /// Manually reload the currently active session's WebView in place.
+  /// Reclaims memory WhatsApp Web has accumulated over a long, actively
+  /// used session (decoded images/video, chat history in the JS heap,
+  /// etc.) — this is an ordinary page reload, NOT a logout: cookies,
+  /// localStorage, and the account's WhatsApp session token all live on
+  /// disk (see LinuxWebKitPlatformView's per-account data directory) and
+  /// survive it, so WhatsApp Web just re-renders from its own local
+  /// state/service worker like a normal browser refresh.
+  Future<void> reloadActive() async {
+    if (_formFactor != FormFactor.desktop) return;
+    final handle = state.handle;
+    if (handle == null) return;
+    await handle.reload();
+  }
+
   Future<void> handleAppResumed(Account activeAccount) async {
     if (_formFactor != FormFactor.mobile) return;
 

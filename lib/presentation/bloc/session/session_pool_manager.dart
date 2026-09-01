@@ -13,6 +13,7 @@ class SessionPoolManager {
     int? maxWarmSessions,
     Duration? idleEvictionTimeout,
     Duration? idleSweepInterval,
+    Duration? activeSessionReloadInterval,
   }) : _adapter = webViewAdapter,
        _maxWarmSessions =
            maxWarmSessions ?? AppConstants.maxRecommendedDesktopSessions,
@@ -24,12 +25,31 @@ class SessionPoolManager {
           seconds: (_idleEvictionTimeout.inSeconds / 2).clamp(30, 300).toInt(),
         );
     _idleSweepTimer = Timer.periodic(interval, (_) => _sweepIdleSessions());
+
+    // FIX (memory growing unboundedly the longer an account is actively
+    // used — e.g. observed climbing to ~900MB-1.2GB on real usage):
+    // `_sweepIdleSessions()` above only ever touches BACKGROUNDED
+    // accounts (the ones in `_pausedSince`) — the currently ACTIVE
+    // account is deliberately skipped there and is never added to
+    // `_pausedSince` in the first place, so nothing in this class ever
+    // reclaimed memory it built up (decoded images/video, growing JS
+    // heap from chat history) just from being scrolled through and used
+    // normally over a long session. A periodic reload of whichever
+    // account is currently active resets that WebProcess back to a
+    // fresh baseline — an ordinary page reload (WhatsApp Web's own
+    // service worker/local storage restores the chat view), not a
+    // logout, since cookies/session data live on disk per-account.
+    _activeReloadTimer = Timer.periodic(
+      activeSessionReloadInterval ?? const Duration(hours: 2),
+      (_) => _reloadActiveSession(),
+    );
   }
 
   final WebViewAdapter _adapter;
   final int _maxWarmSessions;
   final Duration _idleEvictionTimeout;
   late final Timer _idleSweepTimer;
+  late final Timer _activeReloadTimer;
 
   final LinkedHashMap<String, WebViewSessionHandle> _warm =
       LinkedHashMap<String, WebViewSessionHandle>();
@@ -128,6 +148,17 @@ class SessionPoolManager {
     }
   }
 
+  Future<void> _reloadActiveSession() async {
+    final activeId = _activeAccountId;
+    if (activeId == null) return;
+    final handle = _warm[activeId];
+    if (handle == null) return;
+    await MemoryProfiler.logAround(
+      'periodic reload of active session $activeId (reclaim memory)',
+      () => handle.reload(),
+    );
+  }
+
   Future<void> _evictLeastRecentlyUsed() async {
     if (_warm.isEmpty) return;
     final lruId = _warm.keys.first;
@@ -167,5 +198,6 @@ class SessionPoolManager {
 
   void dispose() {
     _idleSweepTimer.cancel();
+    _activeReloadTimer.cancel();
   }
 }
