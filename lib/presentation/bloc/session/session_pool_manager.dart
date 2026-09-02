@@ -18,7 +18,14 @@ class SessionPoolManager {
        _maxWarmSessions =
            maxWarmSessions ?? AppConstants.maxRecommendedDesktopSessions,
        _idleEvictionTimeout =
-           idleEvictionTimeout ?? const Duration(minutes: 10) {
+           // Diturunkan dari 10 menit -> 3 menit. Ini penting untuk total RAM:
+           // "suspend" (about:blank) di native plugin hanya melepas JS heap,
+           // tapi WebProcess + NetworkProcess akun itu (~150-250MB) TETAP
+           // hidup selama masih "warm". Baru saat idle-eviction ini jalan
+           // (unloadFromMemory -> destroy), kedua proses itu benar-benar
+           // dimatikan dan RAM-nya kembali ke sistem. Akun yang memang jarang
+           // dipakai jadi lebih cepat "dilepas" total, bukan cuma dibekukan.
+           idleEvictionTimeout ?? const Duration(minutes: 3) {
     final interval =
         idleSweepInterval ??
         Duration(
@@ -27,20 +34,29 @@ class SessionPoolManager {
     _idleSweepTimer = Timer.periodic(interval, (_) => _sweepIdleSessions());
 
     // FIX (memory growing unboundedly the longer an account is actively
-    // used — e.g. observed climbing to ~900MB-1.2GB on real usage):
-    // `_sweepIdleSessions()` above only ever touches BACKGROUNDED
-    // accounts (the ones in `_pausedSince`) — the currently ACTIVE
-    // account is deliberately skipped there and is never added to
+    // used — observed climbing past ~800MB-1GB+ per account on real
+    // usage, confirmed via WebKitWebProcess RSS, well before this timer
+    // used to fire): `_sweepIdleSessions()` above only ever touches
+    // BACKGROUNDED accounts (the ones in `_pausedSince`) — the currently
+    // ACTIVE account is deliberately skipped there and is never added to
     // `_pausedSince` in the first place, so nothing in this class ever
     // reclaimed memory it built up (decoded images/video, growing JS
     // heap from chat history) just from being scrolled through and used
-    // normally over a long session. A periodic reload of whichever
-    // account is currently active resets that WebProcess back to a
-    // fresh baseline — an ordinary page reload (WhatsApp Web's own
-    // service worker/local storage restores the chat view), not a
-    // logout, since cookies/session data live on disk per-account.
+    // normally over a long session.
+    //
+    // NOTE: this fixed interval is now a fallback safety net only. The
+    // primary defense lives in the native plugin
+    // (linux/runner/webkit_multi_view_plugin.cc), which polls each
+    // account's *actual* WebKitWebProcess RSS via /proc every 60s and
+    // reloads it as soon as it crosses a real memory threshold — this
+    // Dart-side timer can't see real WebProcess memory at all
+    // (`MemoryProfiler.currentRss` below only reads the main Flutter/GTK
+    // process's own RSS, not the WebKitWebProcess children), so it was
+    // previously a blind guess. Shortened from 2h to 20m purely as a
+    // backstop in case the native watchdog's PID-detection heuristic
+    // ever fails to resolve a process.
     _activeReloadTimer = Timer.periodic(
-      activeSessionReloadInterval ?? const Duration(hours: 2),
+      activeSessionReloadInterval ?? const Duration(minutes: 20),
       (_) => _reloadActiveSession(),
     );
   }
