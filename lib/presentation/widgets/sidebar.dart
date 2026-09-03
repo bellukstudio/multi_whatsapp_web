@@ -21,6 +21,7 @@ class Sidebar extends StatelessWidget {
     required this.onOpenSettings,
 
     this.activeSession,
+    this.onLockNow,
   });
 
   final List<Account> accounts;
@@ -32,6 +33,12 @@ class Sidebar extends StatelessWidget {
   final VoidCallback onOpenSettings;
 
   final WebViewSessionHandle? activeSession;
+
+  /// Locks the CURRENTLY OPEN account immediately. Only offered in the
+  /// context menu of the account that is actually active — passed in
+  /// from outside because only the dashboard page knows how to pause
+  /// the native WebView surface for it.
+  final VoidCallback? onLockNow;
 
   static const double railWidth = 76;
 
@@ -152,6 +159,7 @@ class Sidebar extends StatelessWidget {
               accountName: account.name,
             ),
           ),
+          onLockNow: isActive ? onLockNow : null,
         ),
       ),
     );
@@ -335,6 +343,7 @@ class _AccountActionsSheet extends StatelessWidget {
     this.onSetPassword,
     this.onChangePassword,
     this.onRemovePassword,
+    this.onLockNow,
   });
 
   final Account account;
@@ -348,6 +357,10 @@ class _AccountActionsSheet extends StatelessWidget {
   final VoidCallback? onSetPassword;
   final VoidCallback? onChangePassword;
   final VoidCallback? onRemovePassword;
+
+  /// Locks this account (which must currently be the open/active one)
+  /// right away. Null when this account isn't the active one.
+  final VoidCallback? onLockNow;
 
   @override
   Widget build(BuildContext context) {
@@ -381,6 +394,20 @@ class _AccountActionsSheet extends StatelessWidget {
                 : () {
                     Navigator.pop(context);
                     onReload!();
+                  },
+          ),
+          ListTile(
+            enabled: onLockNow != null,
+            leading: const Icon(Icons.lock_clock_outlined),
+            title: const Text('Lock Now'),
+            subtitle: onLockNow == null
+                ? const Text('Open this account first to lock it')
+                : null,
+            onTap: onLockNow == null
+                ? null
+                : () {
+                    Navigator.pop(context);
+                    onLockNow!();
                   },
           ),
           if (isLocked) ...[

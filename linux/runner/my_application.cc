@@ -93,7 +93,7 @@ static void my_application_activate(GApplication* application) {
 
   FlPluginRegistrar* webkit_registrar = fl_plugin_registry_get_registrar_for_plugin(
       FL_PLUGIN_REGISTRY(view), "WebkitMultiViewPlugin");
-  webkit_multi_view_plugin_new(webkit_registrar, fixed_layer);
+  webkit_multi_view_plugin_new(webkit_registrar, fixed_layer, GTK_WIDGET(view));
 
   gtk_widget_show_all(GTK_WIDGET(window));
   gtk_widget_grab_focus(GTK_WIDGET(view));

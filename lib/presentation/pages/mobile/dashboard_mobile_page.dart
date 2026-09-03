@@ -10,6 +10,7 @@ import '../../bloc/account/account_bloc.dart';
 import '../../bloc/lock/account_lock_cubit.dart';
 import '../../bloc/session/session_cubit.dart';
 import '../../widgets/account_lock_dialogs.dart';
+import '../../widgets/account_locked_screen.dart';
 import '../../widgets/account_switcher_bottom.dart';
 import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
@@ -88,11 +89,38 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
                           ),
                         ),
                       ),
+                      onLock: activeAccount == null
+                          ? null
+                          : () => _handleLockNow(
+                              context,
+                              sessionState,
+                              activeAccount.id,
+                              activeAccount.name,
+                            ),
                     ),
                     Expanded(
-                      child: WebViewContainer(
-                        account: activeAccount,
-                        sessionState: sessionState,
+                      child: ValueListenableBuilder<Set<String>>(
+                        valueListenable: context
+                            .watch<AccountLockCubit>()
+                            .sessionLocked,
+                        builder: (context, lockedNow, _) {
+                          if (activeAccount != null &&
+                              lockedNow.contains(activeAccount.id)) {
+                            return AccountLockedScreen(
+                              accountName: activeAccount.name,
+                              onUnlock: () => _handleUnlockNow(
+                                context,
+                                sessionState,
+                                activeAccount.id,
+                                activeAccount.name,
+                              ),
+                            );
+                          }
+                          return WebViewContainer(
+                            account: activeAccount,
+                            sessionState: sessionState,
+                          );
+                        },
                       ),
                     ),
                     AccountSwitcherBottom(
@@ -167,6 +195,25 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
                         activeSession?.reload();
                       },
               ),
+              ListTile(
+                enabled: isActive,
+                leading: const Icon(Icons.lock_clock_outlined),
+                title: const Text('Lock Now'),
+                subtitle: isActive
+                    ? null
+                    : const Text('Buka akun ini dulu untuk mengunci'),
+                onTap: !isActive
+                    ? null
+                    : () async {
+                        Navigator.of(sheetContext, rootNavigator: true).pop();
+                        await _handleLockNow(
+                          context,
+                          context.read<SessionCubit>().state,
+                          id,
+                          name,
+                        );
+                      },
+              ),
               if (isLocked) ...[
                 ListTile(
                   leading: const Icon(Icons.lock_reset_outlined),
@@ -221,6 +268,47 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
         ),
       );
     });
+  }
+
+  Future<void> _handleLockNow(
+    BuildContext context,
+    SessionState sessionState,
+    String accountId,
+    String accountName,
+  ) async {
+    final lockCubit = context.read<AccountLockCubit>();
+
+    if (!lockCubit.isLocked(accountId)) {
+      await showOverlaySafely(
+        sessionState.handle,
+        () => showSetAccountPasswordDialog(
+          context,
+          accountId: accountId,
+          accountName: accountName,
+        ),
+      );
+      if (!lockCubit.isLocked(accountId)) return; // user cancelled
+    }
+
+    await sessionState.handle?.pauseRendering();
+    lockCubit.lockNow(accountId);
+  }
+
+  Future<void> _handleUnlockNow(
+    BuildContext context,
+    SessionState sessionState,
+    String accountId,
+    String accountName,
+  ) async {
+    final unlocked = await showUnlockAccountDialog(
+      context,
+      accountId: accountId,
+      accountName: accountName,
+    );
+    if (!unlocked) return;
+
+    context.read<AccountLockCubit>().unlockSession(accountId);
+    await sessionState.handle?.resumeRendering();
   }
 
   Future<void> _showRenameDialog(
@@ -303,10 +391,12 @@ class _MobileActiveAccountHeader extends StatelessWidget {
   const _MobileActiveAccountHeader({
     required this.account,
     required this.onOpenSettings,
+    this.onLock,
   });
 
   final dynamic account;
   final VoidCallback onOpenSettings;
+  final VoidCallback? onLock;
 
   @override
   Widget build(BuildContext context) {
@@ -333,6 +423,12 @@ class _MobileActiveAccountHeader extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (onLock != null)
+            IconButton(
+              icon: const Icon(Icons.lock_outline),
+              onPressed: onLock,
+              tooltip: 'Lock this account now',
+            ),
           IconButton(
             icon: AppConstants.settingsIcon(),
             onPressed: onOpenSettings,

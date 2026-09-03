@@ -75,6 +75,7 @@ struct _WebkitMultiViewPlugin {
     GObject parent_instance;
     FlMethodChannel* channel;
     GtkFixed* container;
+    GtkWidget* flutter_view;  // FlView — target focus balik saat webview di-hide
     std::map<std::string, WebKitWebView*>* views;
     std::map<std::string, ViewGeometry>* geometry;
     std::set<pid_t>* assigned_pids;   // PID WebProcess yang sudah "diklaim" oleh sebuah view
@@ -473,6 +474,16 @@ static FlMethodResponse* HandleSetVisible(WebkitMultiViewPlugin* self, FlValue* 
     if (!visible) {
         webkit_web_view_set_is_muted(view, TRUE);
 
+        // FIX: gtk_widget_set_visible(FALSE) di atas TIDAK otomatis
+        // mengembalikan keyboard focus ke FlView. Kalau view ini sedang
+        // memegang focus saat di-hide (mis. user habis mengetik di chat),
+        // keystroke berikutnya (mis. di dialog password Flutter yang baru
+        // ditampilkan lewat showOverlaySafely) tidak akan sampai ke mana
+        // pun. Kembalikan fokus secara eksplisit ke Flutter di sini.
+        if (self->flutter_view != nullptr) {
+            gtk_widget_grab_focus(self->flutter_view);
+        }
+
         // Jangan langsung suspend — tunda beberapa detik supaya switch cepat
         // antar akun tidak memicu reload penuh tiap kali.
         if (geo.suspend_timeout_id == 0 && !geo.suspended) {
@@ -567,9 +578,10 @@ static void webkit_multi_view_plugin_init(WebkitMultiViewPlugin* self) {
         MEMORY_WATCHDOG_INTERVAL_SECONDS, MemoryWatchdogCallback, self);
 }
 
-WebkitMultiViewPlugin* webkit_multi_view_plugin_new(FlPluginRegistrar* registrar, GtkFixed* container) {
+WebkitMultiViewPlugin* webkit_multi_view_plugin_new(FlPluginRegistrar* registrar, GtkFixed* container, GtkWidget* flutter_view) {
     WebkitMultiViewPlugin* self = WEBKIT_MULTI_VIEW_PLUGIN(g_object_new(webkit_multi_view_plugin_get_type(), nullptr));
     self->container = container;
+    self->flutter_view = flutter_view;
     g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
     self->channel = fl_method_channel_new(fl_plugin_registrar_get_messenger(registrar), WEBKIT_MULTI_VIEW_METHOD_CHANNEL, FL_METHOD_CODEC(codec));
     fl_method_channel_set_method_call_handler(self->channel, MethodCallCb, g_object_ref(self), g_object_unref);

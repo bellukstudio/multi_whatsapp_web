@@ -8,6 +8,8 @@ import '../../../domain/entities/account.dart';
 import '../../bloc/account/account_bloc.dart';
 import '../../bloc/lock/account_lock_cubit.dart';
 import '../../bloc/session/session_cubit.dart';
+import '../../widgets/account_lock_dialogs.dart';
+import '../../widgets/account_locked_screen.dart';
 import '../../widgets/sidebar.dart';
 import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
@@ -68,6 +70,13 @@ class DashboardDesktopPage extends StatelessWidget {
                           );
                         });
                       },
+                      onLockNow: activeAccount == null
+                          ? null
+                          : () => _handleLockNow(
+                              context,
+                              sessionState,
+                              activeAccount,
+                            ),
                     ),
                     Expanded(
                       child: Column(
@@ -78,11 +87,36 @@ class DashboardDesktopPage extends StatelessWidget {
                             canReload: sessionState.handle != null,
                             onReload: () =>
                                 context.read<SessionCubit>().reloadActive(),
+                            onLock: activeAccount == null
+                                ? null
+                                : () => _handleLockNow(
+                                    context,
+                                    sessionState,
+                                    activeAccount,
+                                  ),
                           ),
                           Expanded(
-                            child: WebViewContainer(
-                              account: activeAccount,
-                              sessionState: sessionState,
+                            child: ValueListenableBuilder<Set<String>>(
+                              valueListenable: context
+                                  .watch<AccountLockCubit>()
+                                  .sessionLocked,
+                              builder: (context, lockedNow, _) {
+                                if (activeAccount != null &&
+                                    lockedNow.contains(activeAccount.id)) {
+                                  return AccountLockedScreen(
+                                    accountName: activeAccount.name,
+                                    onUnlock: () => _handleUnlockNow(
+                                      context,
+                                      sessionState,
+                                      activeAccount,
+                                    ),
+                                  );
+                                }
+                                return WebViewContainer(
+                                  account: activeAccount,
+                                  sessionState: sessionState,
+                                );
+                              },
                             ),
                           ),
                         ],
@@ -96,6 +130,52 @@ class DashboardDesktopPage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _handleLockNow(
+    BuildContext context,
+    SessionState sessionState,
+    Account account,
+  ) async {
+    final lockCubit = context.read<AccountLockCubit>();
+
+    // No password set yet — nothing to lock it with. Ask the user to set
+    // one first, then lock immediately once it's in place.
+    if (!lockCubit.isLocked(account.id)) {
+      await showOverlaySafely(
+        sessionState.handle,
+        () => showSetAccountPasswordDialog(
+          context,
+          accountId: account.id,
+          accountName: account.name,
+        ),
+      );
+      if (!lockCubit.isLocked(account.id)) return; // user cancelled
+    }
+
+    // Pause the native WebView surface FIRST — on Linux/Windows it's a
+    // separate layer on top of Flutter, so the lock screen underneath
+    // wouldn't actually be visible otherwise. This also returns
+    // keyboard focus to Flutter (see webkit_multi_view_plugin.cc), so
+    // the unlock dialog's password field is typeable right away.
+    await sessionState.handle?.pauseRendering();
+    lockCubit.lockNow(account.id);
+  }
+
+  Future<void> _handleUnlockNow(
+    BuildContext context,
+    SessionState sessionState,
+    Account account,
+  ) async {
+    final unlocked = await showUnlockAccountDialog(
+      context,
+      accountId: account.id,
+      accountName: account.name,
+    );
+    if (!unlocked) return;
+
+    context.read<AccountLockCubit>().unlockSession(account.id);
+    await sessionState.handle?.resumeRendering();
   }
 
   Future<void> _showRenameDialog(
@@ -166,11 +246,13 @@ class _ActiveAccountHeader extends StatelessWidget {
     required this.account,
     required this.canReload,
     required this.onReload,
+    this.onLock,
   });
 
   final Account? account;
   final bool canReload;
   final VoidCallback onReload;
+  final VoidCallback? onLock;
 
   @override
   Widget build(BuildContext context) {
@@ -197,6 +279,12 @@ class _ActiveAccountHeader extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (onLock != null)
+            IconButton(
+              icon: const Icon(Icons.lock_outline, size: 20),
+              tooltip: 'Lock this account now',
+              onPressed: onLock,
+            ),
           if (canReload)
             IconButton(
               icon: const Icon(Icons.refresh, size: 20),
