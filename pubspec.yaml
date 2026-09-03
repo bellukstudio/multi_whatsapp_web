@@ -5,7 +5,7 @@ description: >
   Dibangun mengikuti PRD v1.1 (Clean Architecture + BLoC, domain layer
   platform-agnostic).
 publish_to: "none"
-version: 1.0.0+3
+version: 1.0.0+4
 
 environment:
   sdk: ^3.9.2
