@@ -1,10 +1,15 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:multi_whatsapp_web/data/datasources/webview/mobile/native_process_webview_session_handle.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/webview_safe_overlay.dart';
 import '../../bloc/account/account_bloc.dart';
+import '../../bloc/lock/account_lock_cubit.dart';
 import '../../bloc/session/session_cubit.dart';
+import '../../widgets/account_lock_dialogs.dart';
 import '../../widgets/account_switcher_bottom.dart';
 import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
@@ -23,6 +28,11 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NativeProcessWebViewSessionHandle.themeColorArgb = Theme.of(
+        context,
+      ).colorScheme.primary.value;
+    });
   }
 
   @override
@@ -118,6 +128,7 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
   ) async {
     final activeSession = context.read<SessionCubit>().state.handle;
     final isActive = context.read<SessionCubit>().state.activeAccountId == id;
+    final isLocked = context.read<AccountLockCubit>().isLocked(id);
 
     await showOverlaySafely(activeSession, () async {
       await showModalBottomSheet(
@@ -156,7 +167,44 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
                         activeSession?.reload();
                       },
               ),
-
+              if (isLocked) ...[
+                ListTile(
+                  leading: const Icon(Icons.lock_reset_outlined),
+                  title: const Text('Change Password'),
+                  onTap: () {
+                    Navigator.of(sheetContext, rootNavigator: true).pop();
+                    showChangeAccountPasswordDialog(
+                      context,
+                      accountId: id,
+                      accountName: name,
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.lock_open_outlined),
+                  title: const Text('Remove Password'),
+                  onTap: () {
+                    Navigator.of(sheetContext, rootNavigator: true).pop();
+                    showRemoveAccountPasswordDialog(
+                      context,
+                      accountId: id,
+                      accountName: name,
+                    );
+                  },
+                ),
+              ] else
+                ListTile(
+                  leading: const Icon(Icons.lock_outline),
+                  title: const Text('Set Password'),
+                  onTap: () {
+                    Navigator.of(sheetContext, rootNavigator: true).pop();
+                    showSetAccountPasswordDialog(
+                      context,
+                      accountId: id,
+                      accountName: name,
+                    );
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.red),
                 title: const Text(
@@ -240,6 +288,7 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
                 Navigator.of(dialogContext, rootNavigator: true).pop();
                 context.read<SessionCubit>().releaseAccount(id);
                 context.read<AccountBloc>().add(AccountDeleted(id));
+                context.read<AccountLockCubit>().removePassword(id);
               },
               child: const Text('Delete'),
             ),

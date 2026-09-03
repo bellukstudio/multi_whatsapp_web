@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:multi_whatsapp_web/core/utils/android_native_webview.dart';
+import 'package:multi_whatsapp_web/data/datasources/webview/mobile/slot_embed_webview_session_handle.dart';
 import 'package:multi_whatsapp_web/domain/repositories/webview_adapter.dart';
 
 import 'package:webview_windows/webview_windows.dart' as win;
@@ -12,7 +12,6 @@ import '../../core/utils/app_restarter.dart';
 import '../../data/datasources/webview/desktop/linux_webview_adapter.dart';
 import '../../data/datasources/webview/desktop/linux_webkit_platform_view.dart';
 import '../../data/datasources/webview/desktop/windows_webview_adapter.dart';
-import '../../data/datasources/webview/mobile/mobile_webview_session_handle.dart';
 import '../../domain/entities/account.dart';
 import '../bloc/session/session_cubit.dart';
 
@@ -77,10 +76,9 @@ class _EngineSurface extends StatelessWidget {
     if (Platform.isLinux && handle is LinuxWebViewSessionHandle) {
       return _LinuxEngineSurface(handle: handle);
     }
-    if (handle is AndroidNativeWebViewSessionHandle) {
+    if (handle is SlotEmbedWebViewSessionHandle) {
       return _MobileEngineSurface(handle: handle);
     }
-
     return Container(
       color: Colors.black12,
       alignment: Alignment.center,
@@ -294,22 +292,36 @@ class _MobileEngineSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (handle is AndroidNativeWebViewSessionHandle) {
-      return AndroidNativeWebView(handle: handle as AndroidNativeWebViewSessionHandle);
+    if (handle is SlotEmbedWebViewSessionHandle) {
+      // FIX (masih terasa "reload" tiap pindah akun di Android): tanpa
+      // `key` di sini, Flutter menganggap ini widget yang SAMA persis
+      // tiap kali handle berganti (StatelessWidget + tipe sama + key
+      // null == null), jadi `SlotEmbedWebView`/`AndroidView` di
+      // dalamnya TIDAK dibuat ulang — `creationParams` (slot +
+      // accountId) yang baru tidak pernah benar-benar dikirim ke sisi
+      // native, karena AndroidView hanya membaca creationParams sekali
+      // saat pertama kali dibuat. Akibatnya, setelah pindah akun lebih
+      // dari sekali, layar bisa nyangkut menampilkan akun sebelumnya,
+      // yang secara UX kerasa seperti "reload"/glitch tiap ganti akun.
+      //
+      // Dengan `ValueKey(accountId)`, tiap akun punya identitas Element
+      // sendiri: pindah akun benar-benar membuang widget/AndroidView
+      // lama (memicu `SlotEmbedView.dispose()` -> HANYA unbind, sesuai
+      // fix di Kotlin) dan memasang yang baru dengan creationParams
+      // yang benar — WebView & sesi di proses native TETAP hidup
+      // (tidak reload beneran), cuma di-attach ulang ke slot yang
+      // tepat.
+      return SlotEmbedWebView(
+        key: ValueKey('slot_embed_${handle.accountId}'),
+        handle: handle as SlotEmbedWebViewSessionHandle,
+      );
     }
-    // iOS native implementation not built yet — placeholder so the app
-    // doesn't crash if this is somehow reached on iOS before that lands.
     return const Center(
-      child: Padding(
-        padding: EdgeInsets.all(24),
-        child: Text(
-          'WebView native iOS belum tersedia — menyusul.',
-          textAlign: TextAlign.center,
-        ),
-      ),
+      child: Text('WebView native iOS belum tersedia — menyusul.'),
     );
   }
 }
+
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState();

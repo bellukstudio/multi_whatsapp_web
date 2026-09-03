@@ -6,6 +6,7 @@ import '../../../core/utils/desktop_page_route.dart';
 import '../../../core/utils/webview_safe_overlay.dart';
 import '../../../domain/entities/account.dart';
 import '../../bloc/account/account_bloc.dart';
+import '../../bloc/lock/account_lock_cubit.dart';
 import '../../bloc/session/session_cubit.dart';
 import '../../widgets/sidebar.dart';
 import '../../widgets/webview_container.dart';
@@ -24,7 +25,7 @@ class DashboardDesktopPage extends StatelessWidget {
             return BlocBuilder<SessionCubit, SessionState>(
               builder: (context, sessionState) {
                 final activeMatches = accountState.accounts.where(
-                      (a) => a.id == sessionState.activeAccountId,
+                  (a) => a.id == sessionState.activeAccountId,
                 );
                 final activeAccount = activeMatches.isEmpty
                     ? null
@@ -40,15 +41,15 @@ class DashboardDesktopPage extends StatelessWidget {
                       onSelect: (a) => context.read<SessionCubit>().switchTo(a),
                       onAdd: () => showOverlaySafely(
                         sessionState.handle,
-                            () => Navigator.of(
+                        () => Navigator.of(
                           context,
                         ).push(desktopPageRoute((_) => const AddAccountPage())),
                       ),
                       onOpenSettings: () => showOverlaySafely(
                         sessionState.handle,
-                            () => Navigator.of(context).push(
+                        () => Navigator.of(context).push(
                           desktopPageRoute(
-                                (_) => const SettingsPage(
+                            (_) => const SettingsPage(
                               formFactor: FormFactor.desktop,
                             ),
                           ),
@@ -56,14 +57,14 @@ class DashboardDesktopPage extends StatelessWidget {
                       ),
                       onRename: (a) => showOverlaySafely(
                         sessionState.handle,
-                            () => _showRenameDialog(context, a.id, a.name),
+                        () => _showRenameDialog(context, a.id, a.name),
                       ),
 
                       onDelete: (a) {
                         WidgetsBinding.instance.addPostFrameCallback((_) {
                           showOverlaySafely(
                             sessionState.handle,
-                                () => _confirmDeleteAccount(context, a),
+                            () => _confirmDeleteAccount(context, a),
                           );
                         });
                       },
@@ -93,7 +94,7 @@ class DashboardDesktopPage extends StatelessWidget {
             );
           },
         ),
-      )
+      ),
     );
   }
 
@@ -150,6 +151,7 @@ class DashboardDesktopPage extends StatelessWidget {
               Navigator.of(dialogContext, rootNavigator: true).pop();
               context.read<SessionCubit>().releaseAccount(account.id);
               context.read<AccountBloc>().add(AccountDeleted(account.id));
+              context.read<AccountLockCubit>().removePassword(account.id);
             },
             child: const Text('Delete'),
           ),

@@ -56,6 +56,7 @@ dependencies:
   path_provider: ^2.1.4
   path: ^1.9.0
   uuid: ^4.4.2
+  crypto: ^3.0.6
 #  webview_flutter: ^4.10.0
   # PINNED (bukan ^13.x/^14.x): rentang ini masih di bawah lompatan win32
   # ke ^6.0.0 yang terjadi di rilis-rilis mayor device_info_plus yang lebih

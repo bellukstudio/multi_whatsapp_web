@@ -24,6 +24,32 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".nativewebview.WebViewSlotService0"
+            android:process=":webview_slot_0"
+            android:exported="false" />
+        <service
+            android:name=".nativewebview.WebViewSlotService1"
+            android:process=":webview_slot_1"
+            android:exported="false" />
+        <service
+            android:name=".nativewebview.WebViewSlotService2"
+            android:process=":webview_slot_2"
+            android:exported="false" />
+        <service
+            android:name=".nativewebview.WebViewSlotService3"
+            android:process=":webview_slot_3"
+            android:exported="false" />
+        <service
+            android:name=".nativewebview.WebViewSlotService4"
+            android:process=":webview_slot_4"
+            android:exported="false" />
+        <service
+            android:name=".nativewebview.WebViewSlotService5"
+            android:process=":webview_slot_5"
+            android:exported="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

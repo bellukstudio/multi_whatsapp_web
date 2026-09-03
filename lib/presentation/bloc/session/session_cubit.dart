@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -7,7 +5,6 @@ import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/memory_profiler.dart';
 import '../../../data/datasources/webview/desktop/windows_webview_adapter.dart'
     show WebView2RuntimeMissingException;
-import '../../../data/datasources/webview/mobile/mobile_webview_session_handle.dart';
 import '../../../domain/entities/account.dart';
 import '../../../domain/repositories/account_repository.dart';
 import '../../../domain/repositories/webview_adapter.dart';
@@ -22,17 +19,20 @@ class SessionCubit extends Cubit<SessionState> {
     required FormFactor formFactor,
     SessionPoolManager? poolManager,
   }) : _webViewAdapter = webViewAdapter,
-       _accountRepository = accountRepository,
-       _formFactor = formFactor,
-       _pool = formFactor == FormFactor.desktop
-           ? (poolManager ??
-                 SessionPoolManager(
-                   webViewAdapter: webViewAdapter,
-
-                   maxWarmSessions: Platform.isWindows ? 1 : null,
-                 ))
-           : null,
-       super(const SessionState());
+        _accountRepository = accountRepository,
+        _formFactor = formFactor,
+        _pool = formFactor == FormFactor.desktop
+            ? (poolManager ??
+            SessionPoolManager(
+              webViewAdapter: webViewAdapter,
+              // Windows no longer needs to be capped to 1 warm session:
+              // the patched `flutter-webview-windows` plugin gives each
+              // account its own concurrently-alive WebView2 environment
+              // (see windows_webview_adapter.dart), so it can share the
+              // same default cap as macOS/Linux.
+            ))
+            : null,
+        super(const SessionState());
 
   final WebViewAdapter _webViewAdapter;
   final AccountRepository _accountRepository;
@@ -49,13 +49,19 @@ class SessionCubit extends Cubit<SessionState> {
   }
 
   Future<void> _switchToLocked(Account account) async {
-    emit(
-      state.copyWith(
-        status: ActiveSessionStatus.loading,
-        activeAccountId: account.id,
-        clearError: true,
-      ),
-    );
+    final alreadyWarmMobile =
+        _formFactor == FormFactor.mobile &&
+            _mobileWarm.containsKey(account.id);
+
+    if (!alreadyWarmMobile) {
+      emit(
+        state.copyWith(
+          status: ActiveSessionStatus.loading,
+          activeAccountId: account.id,
+          clearError: true,
+        ),
+      );
+    }
 
     final WebViewSessionHandle handle;
     try {
@@ -70,7 +76,7 @@ class SessionCubit extends Cubit<SessionState> {
           errorMessage: e.toString(),
 
           errorNeedsAppRestart:
-              e is WebView2RuntimeMissingException &&
+          e is WebView2RuntimeMissingException &&
               e.isDispatcherQueueConflict,
         ),
       );
@@ -78,7 +84,7 @@ class SessionCubit extends Cubit<SessionState> {
     }
 
     handle.statusStream.listen(
-      (status) =>
+          (status) =>
           _accountRepository.updateStatus(id: account.id, status: status),
       onError: (_) {},
     );
@@ -94,34 +100,26 @@ class SessionCubit extends Cubit<SessionState> {
     );
   }
 
+  final Map<String, WebViewSessionHandle> _mobileWarm = {};
+
   Future<WebViewSessionHandle> _switchMobile(Account account) async {
-    if (state.handle != null) {
-      await MemoryProfiler.logAround(
-        'unload previous mobile session',
-        () => state.handle!.unloadFromMemory(),
-      );
-      await state.handle!.dispose();
+    final existing = _mobileWarm[account.id];
+    if (existing != null) {
+      return existing;
     }
 
     final handle = await MemoryProfiler.logAround(
-      'create mobile session ${account.id}',
-      () => _webViewAdapter.createOrResumeSession(
+      'create_mobile_session_${account.id}',
+          () => _webViewAdapter.createOrResumeSession(
         accountId: account.id,
         sessionPath: account.sessionPath,
       ),
     );
     await handle.navigateToWhatsAppWeb();
+    _mobileWarm[account.id] = handle;
     return handle;
   }
 
-  /// Manually reload the currently active session's WebView in place.
-  /// Reclaims memory WhatsApp Web has accumulated over a long, actively
-  /// used session (decoded images/video, chat history in the JS heap,
-  /// etc.) — this is an ordinary page reload, NOT a logout: cookies,
-  /// localStorage, and the account's WhatsApp session token all live on
-  /// disk (see LinuxWebKitPlatformView's per-account data directory) and
-  /// survive it, so WhatsApp Web just re-renders from its own local
-  /// state/service worker like a normal browser refresh.
   Future<void> reloadActive() async {
     if (_formFactor != FormFactor.desktop) return;
     final handle = state.handle;
@@ -140,13 +138,18 @@ class SessionCubit extends Cubit<SessionState> {
     );
     try {
       final handle = await MemoryProfiler.logAround(
-        'reload mobile session on resume',
-        () => _webViewAdapter.reloadFromPersistedStorage(
+        'reload_mobile_session_on_resume',
+            () => _webViewAdapter.reloadFromPersistedStorage(
           accountId: activeAccount.id,
           sessionPath: activeAccount.sessionPath,
         ),
       );
       await handle.navigateToWhatsAppWeb();
+      final stale = _mobileWarm[activeAccount.id];
+      if (stale != null && !identical(stale, handle)) {
+        await stale.dispose();
+      }
+      _mobileWarm[activeAccount.id] = handle;
       emit(state.copyWith(status: ActiveSessionStatus.ready, handle: handle));
     } catch (e) {
       emit(
@@ -162,18 +165,23 @@ class SessionCubit extends Cubit<SessionState> {
     if (_formFactor != FormFactor.mobile) return;
     if (state.handle == null) return;
     await MemoryProfiler.logAround(
-      'unload mobile session on background',
-      () => state.handle!.unloadFromMemory(),
+      'unload_mobile_session_on_background',
+          () => state.handle!.unloadFromMemory(),
     );
   }
 
   Future<void> releaseAccount(String accountId) async {
     if (_formFactor == FormFactor.desktop) {
       await _pool!.evict(accountId);
-    } else if (state.activeAccountId == accountId && state.handle != null) {
-      await state.handle!.unloadFromMemory();
-      await state.handle!.dispose();
-      emit(state.copyWith(clearHandle: true, activeAccountId: null));
+    } else {
+      final handle = _mobileWarm.remove(accountId);
+      if (handle != null) {
+        await handle.unloadFromMemory();
+        await handle.dispose();
+      }
+      if (state.activeAccountId == accountId) {
+        emit(state.copyWith(clearHandle: true, activeAccountId: null));
+      }
     }
   }
 
@@ -184,7 +192,10 @@ class SessionCubit extends Cubit<SessionState> {
 
       _pool?.dispose();
     } else {
-      await state.handle?.dispose();
+      for (final handle in _mobileWarm.values) {
+        await handle.dispose();
+      }
+      _mobileWarm.clear();
     }
     return super.close();
   }

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/webview_safe_overlay.dart';
 import '../../domain/entities/account.dart';
 import '../../domain/repositories/webview_adapter.dart';
+import '../bloc/lock/account_lock_cubit.dart';
+import 'account_lock_dialogs.dart';
 
 class Sidebar extends StatelessWidget {
   const Sidebar({
@@ -37,61 +40,83 @@ class Sidebar extends StatelessWidget {
     final theme = Theme.of(context);
     final outline = theme.colorScheme.outlineVariant.withValues(alpha: 0.5);
 
-    return Container(
-      width: railWidth,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLow,
-        border: Border(right: BorderSide(color: outline)),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 14),
-          Tooltip(
-            message: 'Add account',
-            waitDuration: const Duration(milliseconds: 400),
-            child: _RailButton(
-              onTap: onAdd,
-              icon: Icons.add_rounded,
-              outlined: true,
-            ),
+    return BlocBuilder<AccountLockCubit, Set<String>>(
+      builder: (context, lockedIds) {
+        return Container(
+          width: railWidth,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLow,
+            border: Border(right: BorderSide(color: outline)),
           ),
-          const SizedBox(height: 10),
-          Divider(height: 1, indent: 18, endIndent: 18, color: outline),
-          Expanded(
-            child: accounts.isEmpty
-                ? const SizedBox.shrink()
-                : ListView.builder(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    itemCount: accounts.length,
-                    itemBuilder: (context, i) {
-                      final account = accounts[i];
-                      return _AccountRailTile(
-                        account: account,
-                        selected: account.id == activeAccountId,
-                        onTap: () => onSelect(account),
-                        onContextMenu: () => _showContextMenu(context, account),
-                      );
-                    },
-                  ),
+          child: Column(
+            children: [
+              const SizedBox(height: 14),
+              Tooltip(
+                message: 'Add account',
+                waitDuration: const Duration(milliseconds: 400),
+                child: _RailButton(
+                  onTap: onAdd,
+                  icon: Icons.add_rounded,
+                  outlined: true,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Divider(height: 1, indent: 18, endIndent: 18, color: outline),
+              Expanded(
+                child: accounts.isEmpty
+                    ? const SizedBox.shrink()
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        itemCount: accounts.length,
+                        itemBuilder: (context, i) {
+                          final account = accounts[i];
+                          return _AccountRailTile(
+                            account: account,
+                            selected: account.id == activeAccountId,
+                            locked: lockedIds.contains(account.id),
+                            onTap: () => _handleTileTap(context, account),
+                            onContextMenu: () =>
+                                _showContextMenu(context, account),
+                          );
+                        },
+                      ),
+              ),
+              Divider(height: 1, indent: 18, endIndent: 18, color: outline),
+              const SizedBox(height: 10),
+              Tooltip(
+                message: 'Settings',
+                waitDuration: const Duration(milliseconds: 400),
+                child: _RailButton(
+                  onTap: onOpenSettings,
+                  icon:
+                      AppConstants.settingsIcon().icon ??
+                      Icons.settings_rounded,
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
           ),
-          Divider(height: 1, indent: 18, endIndent: 18, color: outline),
-          const SizedBox(height: 10),
-          Tooltip(
-            message: 'Settings',
-            waitDuration: const Duration(milliseconds: 400),
-            child: _RailButton(
-              onTap: onOpenSettings,
-              icon: AppConstants.settingsIcon().icon ?? Icons.settings_rounded,
-            ),
-          ),
-          const SizedBox(height: 14),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  Future<void> _handleTileTap(BuildContext context, Account account) async {
+    final lockCubit = context.read<AccountLockCubit>();
+    if (lockCubit.isLocked(account.id)) {
+      final unlocked = await showUnlockAccountDialog(
+        context,
+        accountId: account.id,
+        accountName: account.name,
+      );
+      if (!unlocked) return;
+    }
+    onSelect(account);
   }
 
   void _showContextMenu(BuildContext context, Account account) {
     final isActive = account.id == activeAccountId;
+    final isLocked = context.read<AccountLockCubit>().isLocked(account.id);
     showOverlaySafely(
       activeSession,
       () => showModalBottomSheet(
@@ -99,10 +124,25 @@ class Sidebar extends StatelessWidget {
         useRootNavigator: true,
         builder: (_) => _AccountActionsSheet(
           account: account,
+          isLocked: isLocked,
           onRename: () => onRename(account),
-
           onDelete: () => onDelete(account),
           onReload: isActive ? () => activeSession?.reload() : null,
+          onSetPassword: () => showSetAccountPasswordDialog(
+            context,
+            accountId: account.id,
+            accountName: account.name,
+          ),
+          onChangePassword: () => showChangeAccountPasswordDialog(
+            context,
+            accountId: account.id,
+            accountName: account.name,
+          ),
+          onRemovePassword: () => showRemoveAccountPasswordDialog(
+            context,
+            accountId: account.id,
+            accountName: account.name,
+          ),
         ),
       ),
     );
@@ -161,12 +201,14 @@ class _AccountRailTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.onContextMenu,
+    this.locked = false,
   });
 
   final Account account;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onContextMenu;
+  final bool locked;
 
   Color _statusColor(ColorScheme scheme) {
     switch (account.status) {
@@ -245,6 +287,24 @@ class _AccountRailTile extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (locked)
+                      Positioned(
+                        left: -3,
+                        top: -3,
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: railBg,
+                          ),
+                          child: Icon(
+                            Icons.lock,
+                            size: 10,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -260,9 +320,12 @@ class _AccountActionsSheet extends StatelessWidget {
   const _AccountActionsSheet({
     required this.account,
     required this.onRename,
-
     required this.onDelete,
     required this.onReload,
+    this.isLocked = false,
+    this.onSetPassword,
+    this.onChangePassword,
+    this.onRemovePassword,
   });
 
   final Account account;
@@ -271,6 +334,11 @@ class _AccountActionsSheet extends StatelessWidget {
   final VoidCallback onDelete;
 
   final VoidCallback? onReload;
+
+  final bool isLocked;
+  final VoidCallback? onSetPassword;
+  final VoidCallback? onChangePassword;
+  final VoidCallback? onRemovePassword;
 
   @override
   Widget build(BuildContext context) {
@@ -306,7 +374,32 @@ class _AccountActionsSheet extends StatelessWidget {
                     onReload!();
                   },
           ),
-
+          if (isLocked) ...[
+            ListTile(
+              leading: const Icon(Icons.lock_reset_outlined),
+              title: const Text('Change Password'),
+              onTap: () {
+                Navigator.pop(context);
+                onChangePassword?.call();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.lock_open_outlined),
+              title: const Text('Remove Password'),
+              onTap: () {
+                Navigator.pop(context);
+                onRemovePassword?.call();
+              },
+            ),
+          ] else
+            ListTile(
+              leading: const Icon(Icons.lock_outline),
+              title: const Text('Set Password'),
+              onTap: () {
+                Navigator.pop(context);
+                onSetPassword?.call();
+              },
+            ),
           ListTile(
             leading: const Icon(Icons.delete_outline, color: Colors.red),
             title: const Text('Delete', style: TextStyle(color: Colors.red)),

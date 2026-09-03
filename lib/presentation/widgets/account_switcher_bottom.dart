@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:multi_whatsapp_web/core/constants/app_constants.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../domain/entities/account.dart';
 import '../../domain/repositories/webview_adapter.dart';
+import '../bloc/lock/account_lock_cubit.dart';
+import 'account_lock_dialogs.dart';
 
 class AccountSwitcherBottom extends StatelessWidget {
   const AccountSwitcherBottom({
@@ -28,45 +31,63 @@ class AccountSwitcherBottom extends StatelessWidget {
     final theme = Theme.of(context);
     final outline = theme.colorScheme.outlineVariant.withValues(alpha: 0.5);
 
-    return Container(
-      height: 76,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLow,
-        border: Border(top: BorderSide(color: outline)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              itemCount: accounts.length,
-              itemBuilder: (context, i) {
-                final account = accounts[i];
-                return _AccountStripTile(
-                  account: account,
-                  selected: account.id == activeAccountId,
-                  onTap: () => onSelect(account),
-                  onLongPress: () => onContextMenu(account),
-                );
-              },
-            ),
+    return BlocBuilder<AccountLockCubit, Set<String>>(
+      builder: (context, lockedIds) {
+        return Container(
+          height: 76,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLow,
+            border: Border(top: BorderSide(color: outline)),
           ),
-          Container(width: 1, height: 40, color: outline),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: Tooltip(
-              message: 'Add account',
-              child: _StripActionButton(
-                onTap: onAdd,
-                icon: Icons.add_rounded,
-                outlined: true,
+          child: Row(
+            children: [
+              Expanded(
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  itemCount: accounts.length,
+                  itemBuilder: (context, i) {
+                    final account = accounts[i];
+                    return _AccountStripTile(
+                      account: account,
+                      selected: account.id == activeAccountId,
+                      locked: lockedIds.contains(account.id),
+                      onTap: () => _handleTap(context, account),
+                      onLongPress: () => onContextMenu(account),
+                    );
+                  },
+                ),
               ),
-            ),
+              Container(width: 1, height: 40, color: outline),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Tooltip(
+                  message: 'Add account',
+                  child: _StripActionButton(
+                    onTap: onAdd,
+                    icon: Icons.add_rounded,
+                    outlined: true,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  Future<void> _handleTap(BuildContext context, Account account) async {
+    final lockCubit = context.read<AccountLockCubit>();
+    if (lockCubit.isLocked(account.id)) {
+      final unlocked = await showUnlockAccountDialog(
+        context,
+        accountId: account.id,
+        accountName: account.name,
+      );
+      if (!unlocked) return;
+    }
+    onSelect(account);
   }
 }
 
@@ -116,12 +137,14 @@ class _AccountStripTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.onLongPress,
+    this.locked = false,
   });
 
   final Account account;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
+  final bool locked;
 
   Color _statusColor(ColorScheme scheme) {
     switch (account.status) {
@@ -195,6 +218,24 @@ class _AccountStripTile extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (locked)
+                  Positioned(
+                    left: -3,
+                    top: -3,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: stripBg,
+                      ),
+                      child: Icon(
+                        Icons.lock,
+                        size: 10,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

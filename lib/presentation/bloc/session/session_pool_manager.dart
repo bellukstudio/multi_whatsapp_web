@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:io' show Platform;
 
 import 'package:multi_whatsapp_web/core/constants/app_constants.dart';
 import 'package:multi_whatsapp_web/core/utils/memory_profiler.dart';
@@ -186,10 +185,13 @@ class SessionPoolManager {
         await handle.unloadFromMemory();
         await handle.dispose();
       });
-
-      if (Platform.isWindows) {
-        await Future<void>.delayed(const Duration(milliseconds: 1200));
-      }
+      // NOTE: the old Platform.isWindows 1200ms post-eviction delay was
+      // a workaround for the single-shared-WebView2-environment race
+      // (waiting for the previous account's environment teardown before
+      // the next account could grab the one shared environment). Now
+      // that each account gets its own independent environmentId (see
+      // windows_webview_adapter.dart), there's no shared resource to
+      // race against, so this artificial delay is no longer needed.
     }
   }
 
