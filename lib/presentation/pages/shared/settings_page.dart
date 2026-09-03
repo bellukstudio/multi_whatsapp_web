@@ -63,7 +63,7 @@ class SettingsPage extends StatelessWidget {
               'Multi WhatsApp Web is an unofficial WhatsApp Web session '
               'manager. Not affiliated with WhatsApp/Meta. Using an '
               'unofficial client may carry account risk under WhatsApp\'s '
-              'Terms of Service (see PRD §37).',
+              'Terms of Service',
             ),
           ),
         ],
