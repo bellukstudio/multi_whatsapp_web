@@ -47,3 +47,9 @@ Proyek ini adalah proyek Flutter standar. Kalau ini pertama kalinya kalian menge
 - [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
 
 Dokumentasi lengkap tersedia di [flutter.dev](https://docs.flutter.dev/), termasuk tutorial, contoh, panduan pengembangan mobile, dan referensi API lengkap.
+
+   ## Screenshot
+
+![Dashboard multi-akun](ss1.png)
+![Dashboard akun](ss2.png)
+![Dashboard Setting](ss3.png)
