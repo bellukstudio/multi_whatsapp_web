@@ -120,7 +120,7 @@ if [ ! -f "$LINUXDEPLOY" ]; then
 fi
 
 echo "==> 4. Packaging AppImage"
-export VERSION="${VERSION:-1.0.0}"
+export VERSION="${VERSION:-1.0.4}"
 # NO_STRIP: linuxdeploy bundles its own (older) `strip` binary, which
 # chokes on the `.relr.dyn` relocation section that modern toolchains
 # (e.g. current Arch Linux) emit by default — every "unknown type [0x13]
