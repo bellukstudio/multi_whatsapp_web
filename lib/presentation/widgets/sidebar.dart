@@ -128,20 +128,29 @@ class Sidebar extends StatelessWidget {
           onRename: () => onRename(account),
           onDelete: () => onDelete(account),
           onReload: isActive ? () => activeSession?.reload() : null,
-          onSetPassword: () => showSetAccountPasswordDialog(
-            context,
-            accountId: account.id,
-            accountName: account.name,
+          onSetPassword: () => showOverlaySafely(
+            activeSession,
+            () => showSetAccountPasswordDialog(
+              context,
+              accountId: account.id,
+              accountName: account.name,
+            ),
           ),
-          onChangePassword: () => showChangeAccountPasswordDialog(
-            context,
-            accountId: account.id,
-            accountName: account.name,
+          onChangePassword: () => showOverlaySafely(
+            activeSession,
+            () => showChangeAccountPasswordDialog(
+              context,
+              accountId: account.id,
+              accountName: account.name,
+            ),
           ),
-          onRemovePassword: () => showRemoveAccountPasswordDialog(
-            context,
-            accountId: account.id,
-            accountName: account.name,
+          onRemovePassword: () => showOverlaySafely(
+            activeSession,
+            () => showRemoveAccountPasswordDialog(
+              context,
+              accountId: account.id,
+              accountName: account.name,
+            ),
           ),
         ),
       ),
