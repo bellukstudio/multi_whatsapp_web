@@ -109,15 +109,6 @@ class Sidebar extends StatelessWidget {
   }
 
   Future<void> _handleTileTap(BuildContext context, Account account) async {
-    final lockCubit = context.read<AccountLockCubit>();
-    if (lockCubit.isLocked(account.id)) {
-      final unlocked = await showUnlockAccountDialog(
-        context,
-        accountId: account.id,
-        accountName: account.name,
-      );
-      if (!unlocked) return;
-    }
     onSelect(account);
   }
 

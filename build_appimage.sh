@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build multi_whatsapp_web as a Linux .AppImage.
+# Build multiwhatsappweb as a Linux .AppImage.
 # Run this from the FLUTTER PROJECT ROOT (folder containing pubspec.yaml).
 set -euo pipefail
 
-APP_NAME="multi_whatsapp_web"
-APP_ID="com.bellukstudio.multi_whatsapp_web"
+APP_NAME="multiwhatsappweb"
+APP_ID="com.bellukstudio.multiwhatsappweb"
 BUNDLE_DIR="build/linux/x64/release/bundle"
 APPDIR="build/AppDir"
 
@@ -107,7 +107,7 @@ cat > "$APPDIR/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
-exec "${HERE}/usr/bin/multi_whatsapp_web" "$@"
+exec "${HERE}/usr/bin/multiwhatsappweb" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 

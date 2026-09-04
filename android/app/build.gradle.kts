@@ -3,8 +3,12 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
+    // START: FlutterFire Configuration
+    //id("com.google.gms.google-services")
+    // END: FlutterFire Configuration
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services")
 }
 
 val keystoreProperties = Properties()
@@ -15,7 +19,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.bellukstudio.multi_whatsapp_web"
+    namespace = "com.bellukstudio.multiwhatsappweb"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -29,7 +33,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.bellukstudio.multi_whatsapp_web"
+        applicationId = "com.bellukstudio.multiwhatsappweb"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -70,4 +74,6 @@ flutter {
 
 dependencies {
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation(platform("com.google.firebase:firebase-bom:34.18.0"))
+    implementation("com.google.firebase:firebase-analytics")
 }

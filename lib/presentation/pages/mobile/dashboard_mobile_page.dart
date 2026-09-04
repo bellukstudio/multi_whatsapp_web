@@ -127,7 +127,12 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
                       accounts: accountState.accounts,
                       activeAccountId: sessionState.activeAccountId,
                       activeSession: sessionState.handle,
-                      onSelect: (a) => context.read<SessionCubit>().switchTo(a),
+                      onSelect: (a) {
+                        context.read<AccountLockCubit>().ensureLockedIfNeeded(
+                          a.id,
+                        );
+                        context.read<SessionCubit>().switchTo(a);
+                      },
                       onAdd: () => showOverlaySafely(
                         sessionState.handle,
                         () => Navigator.of(context).push(

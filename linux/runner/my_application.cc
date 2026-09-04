@@ -87,7 +87,7 @@ static void my_application_activate(GApplication* application) {
   gtk_overlay_set_overlay_pass_through(overlay, GTK_WIDGET(fixed_layer), TRUE);
 
   // FIX 3: Nonaktifkan plugin InAppWebView yang boros RAM jika di Linux
-  g_setenv("MULTI_WHATSAPP_WEB_DISABLE_INAPPWEBVIEW_LINUX", "1", TRUE);
+  g_setenv("multiwhatsappweb_DISABLE_INAPPWEBVIEW_LINUX", "1", TRUE);
   
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 

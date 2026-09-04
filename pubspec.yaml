@@ -5,7 +5,7 @@ description: >
   Dibangun mengikuti PRD v1.1 (Clean Architecture + BLoC, domain layer
   platform-agnostic).
 publish_to: "none"
-version: 1.0.0+4
+version: 1.0.5+5
 
 environment:
   sdk: ^3.9.2
@@ -20,7 +20,7 @@ dependencies:
 
   get_it: ^7.7.0
   injectable: ^2.4.1
-
+  firebase_core: ^4.14.0
   isar_community: ^3.3.2
   isar_community_flutter_libs: ^3.3.2
 
@@ -66,7 +66,12 @@ dependencies:
 
   # PINNED (bukan ^9.x/^10.x): sama seperti device_info_plus di atas —
   # package_info_plus 10.0.0 menaikkan win32 ke ^6.0.1. 8.0.2 aman.
-  # package_info_plus: ^8.0.2
+  package_info_plus: ^8.0.2
+
+  # Dipakai untuk membuka link update (Play Store/App Store/halaman
+  # download desktop) dari fitur reminder update. Support penuh di
+  # Android, iOS, macOS, Windows, dan Linux.
+  url_launcher: ^6.3.1
 
   # connectivity_plus: ^7.0.0
 
@@ -80,6 +85,9 @@ dependencies:
   launch_at_startup: ^0.3.1
 
   logger: ^2.4.0
+  firebase_messaging: ^16.6.0
+  cloud_firestore: ^6.9.0
+  firedart: ^0.9.8
 
 dev_dependencies:
   flutter_test:

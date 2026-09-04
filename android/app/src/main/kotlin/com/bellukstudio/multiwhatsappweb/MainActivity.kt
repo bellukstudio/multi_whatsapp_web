@@ -1,6 +1,6 @@
-package com.bellukstudio.multi_whatsapp_web
+package com.bellukstudio.multiwhatsappweb
 
-import com.bellukstudio.multi_whatsapp_web.nativewebview.SlotEmbedViewFactory
+import com.bellukstudio.multiwhatsappweb.nativewebview.SlotEmbedViewFactory
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 
@@ -12,7 +12,7 @@ class MainActivity : FlutterActivity() {
             .platformViewsController
             .registry
             .registerViewFactory(
-                "multi_whatsapp_web/slot_embed",
+                "multiwhatsappweb/slot_embed",
                 SlotEmbedViewFactory(flutterEngine.dartExecutor.binaryMessenger),
             )
     }

@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:multi_whatsapp_web/core/constants/app_constants.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/webview_safe_overlay.dart';
 import '../../domain/entities/account.dart';
 import '../../domain/repositories/webview_adapter.dart';
 import '../bloc/lock/account_lock_cubit.dart';
@@ -78,15 +79,18 @@ class AccountSwitcherBottom extends StatelessWidget {
   }
 
   Future<void> _handleTap(BuildContext context, Account account) async {
-    final lockCubit = context.read<AccountLockCubit>();
-    if (lockCubit.isLocked(account.id)) {
-      final unlocked = await showUnlockAccountDialog(
-        context,
-        accountId: account.id,
-        accountName: account.name,
-      );
-      if (!unlocked) return;
-    }
+    // final lockCubit = context.read<AccountLockCubit>();
+    // if (lockCubit.isLocked(account.id)) {
+    //   final unlocked = await showOverlaySafely(
+    //     activeSession,
+    //     () => showUnlockAccountDialog(
+    //       context,
+    //       accountId: account.id,
+    //       accountName: account.name,
+    //     ),
+    //   );
+    //   if (unlocked != true) return;
+    // }
     onSelect(account);
   }
 }

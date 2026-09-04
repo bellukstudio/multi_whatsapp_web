@@ -1,6 +1,6 @@
 {
-    "name": "multi_whatsapp_web",
-    "short_name": "multi_whatsapp_web",
+    "name": "multiwhatsappweb",
+    "short_name": "multiwhatsappweb",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0FA05A",

@@ -11,7 +11,7 @@ G_DECLARE_FINAL_TYPE(WebkitMultiViewPlugin, webkit_multi_view_plugin,
                       WEBKIT_MULTI_VIEW, PLUGIN, GObject)
 
 // `registrar` gives us the method channel (see
-// multi_whatsapp_web/webkit_view in linux_webkit_platform_view.dart).
+// multiwhatsappweb/webkit_view in linux_webkit_platform_view.dart).
 // `container` is a GtkFixed layered ON TOP of the FlView (via a
 // GtkOverlay — see my_application.cc) that every account's WebKitWebView
 // gets placed into at whatever x/y/width/height Flutter reports its

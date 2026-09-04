@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 project(runner LANGUAGES CXX)
 
 set(BINARY_NAME "multi_whatsapp_web")
-set(APPLICATION_ID "com.bellukstudio.multi_whatsapp_web")
+set(APPLICATION_ID "com.bellukstudio.multiwhatsappweb")
 
 cmake_policy(SET CMP0063 NEW)
 # Newer CMake (e.g. Arch's rolling-release version) defaults policies

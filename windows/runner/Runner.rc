@@ -92,9 +92,9 @@ BEGIN
             VALUE "CompanyName", "com.bellukstudio" "\0"
             VALUE "FileDescription", "Multi WhatsApp Web" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "multi_whatsapp_web" "\0"
+            VALUE "InternalName", "multiwhatsappweb" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.bellukstudio. All rights reserved." "\0"
-            VALUE "OriginalFilename", "multi_whatsapp_web.exe" "\0"
+            VALUE "OriginalFilename", "multiwhatsappweb.exe" "\0"
             VALUE "ProductName", "Multi WhatsApp Web" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END

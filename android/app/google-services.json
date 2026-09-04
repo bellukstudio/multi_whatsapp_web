@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "851104808206",
+    "project_id": "bellukstudio-8abde",
+    "storage_bucket": "bellukstudio-8abde.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:851104808206:android:520fffe02bde7996176b5f",
+        "android_client_info": {
+          "package_name": "com.bellukstudio.multiwhatsappweb"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDZiOrgWiylyeLkjcDmoV7ZW04UhNVQg8Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

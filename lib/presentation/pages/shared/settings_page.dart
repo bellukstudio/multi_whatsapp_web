@@ -4,6 +4,8 @@ import 'package:multi_whatsapp_web/presentation/bloc/session/session_cubit.dart'
 
 import '../../../core/constants/app_constants.dart';
 import '../../bloc/theme/theme_cubit.dart';
+import '../../bloc/update/update_cubit.dart';
+import '../../widgets/update_reminder_dialogs.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.formFactor});
@@ -55,7 +57,68 @@ class SettingsPage extends StatelessWidget {
               title: Text('Session storage location'),
               subtitle: Text('App support directory (per-account subfolders)'),
             ),
+            const Divider(),
           ],
+
+          const ListTile(title: Text('Updates'), dense: true),
+          BlocConsumer<UpdateCubit, UpdateState>(
+            listenWhen: (previous, current) =>
+                previous.status != current.status &&
+                current.status != UpdateStatus.checking,
+            listener: (context, state) async {
+              final cubit = context.read<UpdateCubit>();
+              switch (state.status) {
+                case UpdateStatus.upToDate:
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Kamu sudah pakai versi terbaru.'),
+                    ),
+                  );
+                case UpdateStatus.available:
+                  if (state.info != null) {
+                    await showOptionalUpdateDialog(
+                      context,
+                      info: state.info!,
+                      currentVersion: state.currentVersion,
+                      updateUrl: cubit.updateUrlForThisPlatform(),
+                      onLater: () => cubit.skipCurrentVersion(),
+                    );
+                  }
+                case UpdateStatus.required:
+                  if (state.info != null) {
+                    await showMandatoryUpdateDialog(
+                      context,
+                      info: state.info!,
+                      currentVersion: state.currentVersion,
+                      updateUrl: cubit.updateUrlForThisPlatform(),
+                    );
+                  }
+                case UpdateStatus.initial:
+                case UpdateStatus.checking:
+                  break;
+              }
+            },
+            builder: (context, state) {
+              final checking = state.status == UpdateStatus.checking;
+              return ListTile(
+                leading: checking
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.system_update_alt_rounded),
+                title: const Text('Check for Updates'),
+                subtitle: state.currentVersion != null
+                    ? Text('Versi saat ini: ${state.currentVersion}')
+                    : null,
+                onTap: checking
+                    ? null
+                    : () => context.read<UpdateCubit>().checkForUpdate(),
+              );
+            },
+          ),
+          const Divider(),
 
           ListTile(
             title: const Text('About'),
@@ -63,7 +126,7 @@ class SettingsPage extends StatelessWidget {
               'Multi WhatsApp Web is an unofficial WhatsApp Web session '
               'manager. Not affiliated with WhatsApp/Meta. Using an '
               'unofficial client may carry account risk under WhatsApp\'s '
-              'Terms of Service (see PRD §37).',
+              'Terms of Service',
             ),
           ),
         ],
@@ -71,3 +134,4 @@ class SettingsPage extends StatelessWidget {
     );
   }
 }
+

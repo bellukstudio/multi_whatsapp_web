@@ -40,7 +40,12 @@ class DashboardDesktopPage extends StatelessWidget {
                       accounts: accountState.accounts,
                       activeAccountId: sessionState.activeAccountId,
                       activeSession: sessionState.handle,
-                      onSelect: (a) => context.read<SessionCubit>().switchTo(a),
+                      onSelect: (a) {
+                        context.read<AccountLockCubit>().ensureLockedIfNeeded(
+                          a.id,
+                        );
+                        context.read<SessionCubit>().switchTo(a);
+                      },
                       onAdd: () => showOverlaySafely(
                         sessionState.handle,
                         () => Navigator.of(
@@ -96,25 +101,33 @@ class DashboardDesktopPage extends StatelessWidget {
                                   ),
                           ),
                           Expanded(
-                            child: ValueListenableBuilder<Set<String>>(
-                              valueListenable: context
-                                  .watch<AccountLockCubit>()
-                                  .sessionLocked,
-                              builder: (context, lockedNow, _) {
-                                if (activeAccount != null &&
-                                    lockedNow.contains(activeAccount.id)) {
-                                  return AccountLockedScreen(
-                                    accountName: activeAccount.name,
-                                    onUnlock: () => _handleUnlockNow(
-                                      context,
-                                      sessionState,
-                                      activeAccount,
-                                    ),
-                                  );
-                                }
-                                return WebViewContainer(
-                                  account: activeAccount,
-                                  sessionState: sessionState,
+                            child: BlocBuilder<AccountLockCubit, Set<String>>(
+                              builder: (context, lockedIds) {
+                                return ValueListenableBuilder<Set<String>>(
+                                  valueListenable: context
+                                      .watch<AccountLockCubit>()
+                                      .sessionLocked,
+                                  builder: (context, lockedNow, _) {
+                                    final isLocked =
+                                        activeAccount != null &&
+                                        lockedIds.contains(activeAccount.id) &&
+                                        lockedNow.contains(activeAccount.id);
+
+                                    if (isLocked) {
+                                      return AccountLockedScreen(
+                                        accountName: activeAccount.name,
+                                        onUnlock: () => _handleUnlockNow(
+                                          context,
+                                          sessionState,
+                                          activeAccount,
+                                        ),
+                                      );
+                                    }
+                                    return WebViewContainer(
+                                      account: activeAccount,
+                                      sessionState: sessionState,
+                                    );
+                                  },
                                 );
                               },
                             ),
@@ -139,8 +152,6 @@ class DashboardDesktopPage extends StatelessWidget {
   ) async {
     final lockCubit = context.read<AccountLockCubit>();
 
-    // No password set yet — nothing to lock it with. Ask the user to set
-    // one first, then lock immediately once it's in place.
     if (!lockCubit.isLocked(account.id)) {
       await showOverlaySafely(
         sessionState.handle,
@@ -150,14 +161,9 @@ class DashboardDesktopPage extends StatelessWidget {
           accountName: account.name,
         ),
       );
-      if (!lockCubit.isLocked(account.id)) return; // user cancelled
+      if (!lockCubit.isLocked(account.id)) return;
     }
 
-    // Pause the native WebView surface FIRST — on Linux/Windows it's a
-    // separate layer on top of Flutter, so the lock screen underneath
-    // wouldn't actually be visible otherwise. This also returns
-    // keyboard focus to Flutter (see webkit_multi_view_plugin.cc), so
-    // the unlock dialog's password field is typeable right away.
     await sessionState.handle?.pauseRendering();
     lockCubit.lockNow(account.id);
   }

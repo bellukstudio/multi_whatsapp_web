@@ -54,6 +54,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\flutter_secure_storage_windows_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\flutter_windows.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\cloud_firestore_plugin.lib"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\firebase_core_plugin.lib"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\multi_whatsapp_web.exp"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\url_launcher_windows_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\multi_whatsapp_web.lib"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\isar_community_flutter_libs_plugin.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\build\windows\x64\runner\Release\libisar.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\multi_whatsapp_web\compiler\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion

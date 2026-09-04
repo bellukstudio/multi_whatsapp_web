@@ -1,4 +1,4 @@
-package com.bellukstudio.multi_whatsapp_web.nativewebview
+package com.bellukstudio.multiwhatsappweb.nativewebview
 
 import android.content.ComponentName
 import android.content.Context
@@ -41,7 +41,7 @@ class SlotEmbedView(
 ) : PlatformView {
 
     private val surfaceView = SurfaceView(context)
-    private val channel = MethodChannel(messenger, "multi_whatsapp_web/slot_embed_$viewId")
+    private val channel = MethodChannel(messenger, "multiwhatsappweb/slot_embed_$viewId")
 
     private val slot = (creationParams?.get("slot") as? Int) ?: 0
     private val accountId = creationParams?.get("accountId") as? String ?: "unknown"

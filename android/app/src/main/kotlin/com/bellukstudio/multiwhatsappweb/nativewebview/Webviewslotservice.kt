@@ -1,4 +1,4 @@
-package com.bellukstudio.multi_whatsapp_web.nativewebview
+package com.bellukstudio.multiwhatsappweb.nativewebview
 
 import android.app.Service
 import android.content.Intent

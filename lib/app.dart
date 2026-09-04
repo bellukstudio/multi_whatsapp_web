@@ -9,6 +9,7 @@ import 'data/datasources/local/account_lock_local_datasource.dart';
 import 'domain/repositories/account_repository.dart';
 import 'domain/repositories/webview_adapter.dart';
 import 'domain/usecases/add_account.dart';
+import 'domain/usecases/check_for_update.dart';
 import 'domain/usecases/delete_account.dart';
 import 'domain/usecases/get_accounts.dart';
 import 'domain/usecases/logout_account.dart';
@@ -17,7 +18,9 @@ import 'presentation/bloc/account/account_bloc.dart';
 import 'presentation/bloc/lock/account_lock_cubit.dart';
 import 'presentation/bloc/session/session_cubit.dart';
 import 'presentation/bloc/theme/theme_cubit.dart';
+import 'presentation/bloc/update/update_cubit.dart';
 import 'presentation/responsive/responsive_layout.dart';
+import 'presentation/widgets/update_reminder_gate.dart';
 
 final RouteObserver<ModalRoute<void>> desktopWebViewRouteObserver =
     RouteObserver<ModalRoute<void>>();
@@ -44,6 +47,7 @@ class MultiWhatsAppWebApp extends StatelessWidget {
         BlocProvider(
           create: (_) => AccountLockCubit(getIt<AccountLockLocalDatasource>()),
         ),
+        BlocProvider(create: (_) => UpdateCubit(getIt<CheckForUpdate>())),
         BlocProvider(
           create: (_) => SessionCubit(
             webViewAdapter: getIt<WebViewAdapter>(),
@@ -70,7 +74,11 @@ class MultiWhatsAppWebApp extends StatelessWidget {
                 appName: 'Multi WhatsApp Web',
                 onFinished: () {
                   Navigator.of(innerContext).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const ResponsiveLayout()),
+                    MaterialPageRoute(
+                      builder: (_) => const UpdateReminderGate(
+                        child: ResponsiveLayout(),
+                      ),
+                    ),
                   );
                 },
               ),

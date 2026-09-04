@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 
-#define WEBKIT_MULTI_VIEW_METHOD_CHANNEL "multi_whatsapp_web/webkit_view"
+#define WEBKIT_MULTI_VIEW_METHOD_CHANNEL "multiwhatsappweb/webkit_view"
 
 // Berapa lama akun harus tersembunyi sebelum benar-benar kita "suspend"
 // (unload) ke about:blank. Delay ini mencegah reload penuh setiap kali

@@ -1,4 +1,4 @@
-# multi_whatsapp_web
+# multiwhatsappweb
 
 A new Flutter project.
 
