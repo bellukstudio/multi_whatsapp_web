@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:multi_whatsapp_web/presentation/bloc/session/session_cubit.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../bloc/theme/theme_cubit.dart';
