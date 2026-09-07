@@ -107,44 +107,120 @@ fi
 # FIX (symbol lookup error: /usr/lib/libsecret-1.so.0: undefined symbol:
 # g_task_set_static_name, on machines other than the one it was built on):
 # LD_LIBRARY_PATH previously only pointed at ${HERE}/usr/bin/lib (the
-# Flutter bundle's own lib/ folder). linuxdeploy, run further below, copies
-# ALL auto-detected shared-library dependencies (glib, gtk, webkit2gtk,
-# libsecret, etc.) into ${HERE}/usr/lib instead — a different directory
-# that was missing from LD_LIBRARY_PATH. Since linuxdeploy does not
-# overwrite an AppRun that already exists in the AppDir, that omission
-# stuck: at runtime the app silently fell back to loading these libraries
-# from the HOST system rather than the ones bundled alongside it. On a
-# host whose libsecret was built against a different/newer glib ABI than
-# whatever glib ends up loaded, this produces exactly this undefined
-# symbol error. Adding usr/lib (checked first) makes the app consistently
-# use the bundled, mutually-compatible set of libraries instead of mixing
-# them with the host's.
+# Flutter bundle's own lib/ folder). linuxdeploy copies ALL auto-detected
+# shared-library dependencies (glib, gtk, webkit2gtk, libsecret, etc.)
+# into ${HERE}/usr/lib instead — a different directory that was missing
+# from LD_LIBRARY_PATH. Since linuxdeploy does not overwrite an AppRun
+# that already exists in the AppDir, that omission stuck: at runtime the
+# app silently fell back to loading these libraries from the HOST system
+# instead of the ones bundled alongside it, causing ABI mismatches.
+# Adding usr/lib (checked first) fixes that.
+#
+# "cd" into usr/: see the WebKit binary-patch step further below — it
+# turns the compile-time-hardcoded "/usr/lib/.../WebKitNetworkProcess"
+# path inside libwebkit2gtk into a RELATIVE "lib/.../WebKitNetworkProcess"
+# path of the same length. A relative path is resolved against the
+# process's current working directory, so we set that directory to
+# ${HERE}/usr here — matching where "/usr" used to point — before
+# exec'ing the real binary.
 cat > "$APPDIR/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
+cd "${HERE}/usr" || exit 1
 exec "${HERE}/usr/bin/multi_whatsapp_web" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
-echo "==> 3. Fetching linuxdeploy (if not already present)"
+echo "==> 3. Fetching linuxdeploy + appimagetool (if not already present)"
 LINUXDEPLOY="build/linuxdeploy-x86_64.AppImage"
 if [ ! -f "$LINUXDEPLOY" ]; then
   curl -L -o "$LINUXDEPLOY" \
     https://github.com/linuxdeploy/linuxdeploy/releases/latest/download/linuxdeploy-x86_64.AppImage
   chmod +x "$LINUXDEPLOY"
 fi
+# We can't use linuxdeploy's built-in "--output appimage" one-shot mode
+# anymore (see below for why), so we package with appimagetool directly.
+APPIMAGETOOL="build/appimagetool-x86_64.AppImage"
+if [ ! -f "$APPIMAGETOOL" ]; then
+  curl -L -o "$APPIMAGETOOL" \
+    https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+  chmod +x "$APPIMAGETOOL"
+fi
 
-echo "==> 4. Packaging AppImage"
 export VERSION="${VERSION:-1.0.4}"
+
+echo "==> 4. Deploying shared-library dependencies into AppDir"
 # NO_STRIP: linuxdeploy bundles its own (older) `strip` binary, which
 # chokes on the `.relr.dyn` relocation section that modern toolchains
 # (e.g. current Arch Linux) emit by default — every "unknown type [0x13]
-# section .relr.dyn" error above is exactly that mismatch, and it's a
-# known linuxdeploy limitation, not something wrong with this project's
-# build. Skipping the strip step avoids it entirely; the AppImage will
-# just be a bit larger (unstripped debug symbols kept in) rather than
-# broken/incomplete.
-NO_STRIP=true "$LINUXDEPLOY" --appdir "$APPDIR" --output appimage
+# section .relr.dyn" error is exactly that mismatch, and it's a known
+# linuxdeploy limitation, not something wrong with this project's build.
+# Skipping the strip step avoids it; the AppImage will just be a bit
+# larger (unstripped debug symbols kept in) rather than broken/incomplete.
+#
+# Deliberately NOT passing --output appimage here (unlike before): that
+# flag packages the AppImage immediately after deploying dependencies,
+# leaving no chance to binary-patch libwebkit2gtk in between. We deploy
+# only, patch, then package separately with appimagetool in step 6.
+NO_STRIP=true "$LINUXDEPLOY" --appdir "$APPDIR"
+
+# FIX (CRITICAL: "Unable to spawn a new child process: Failed to spawn
+# child process /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess
+# (No such file or directory)"):
+#
+# This is a well-known upstream WebKitGTK + AppImage packaging limitation
+# (see linuxdeploy/linuxdeploy-plugin-gtk#42) — not specific to this
+# project. libwebkit2gtk spawns WebKitNetworkProcess / WebKitWebProcess
+# as separate HELPER EXECUTABLES (not .so files, so linuxdeploy's `ldd`
+# based scan never finds them) from a path baked into the library at
+# COMPILE TIME on the ubuntu-22.04 CI runner:
+# /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/. Any machine without that
+# EXACT Debian/Ubuntu multiarch path (e.g. Arch, Fedora, Manjaro) fails
+# with "No such file or directory" even though the AppImage otherwise
+# runs fine — because WebKitGTK re-resolves this path at every runtime,
+# it can't be fixed by an env var (WEBKIT_EXEC_PATH is not honored by
+# current WebKitGTK versions).
+#
+# The only working fix (the same one the Tauri project ships in
+# production, see tauri-apps/linuxdeploy-plugin-gtk) is to:
+#   1. bundle that whole webkit2gtk directory, keeping its original
+#      /usr/lib/<triplet>/webkit2gtk-<ver> path structure intact under
+#      the AppDir, and
+#   2. binary-patch every "/usr" (4 bytes) inside the bundled
+#      libwebkit2gtk*.so files into "././" (also 4 bytes — same length,
+#      so the file's internal offsets aren't corrupted), turning the
+#      absolute system path into a relative path that resolves inside
+#      the AppImage instead. AppRun's "cd" above is what makes that
+#      relative path land in the right place at runtime.
+echo "==> 4b. Bundling + patching WebKitGTK helper processes"
+WEBKIT_TRIPLET="$(gcc -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)"
+WEBKIT_SRC_DIR=""
+for candidate in \
+  "/usr/lib/${WEBKIT_TRIPLET}/webkit2gtk-4.1" \
+  "/usr/lib/${WEBKIT_TRIPLET}/webkit2gtk-4.0" \
+  "/usr/libexec/webkit2gtk-4.1" \
+  "/usr/libexec/webkit2gtk-4.0"; do
+  if [ -d "$candidate" ]; then
+    WEBKIT_SRC_DIR="$candidate"
+    break
+  fi
+done
+
+if [ -n "$WEBKIT_SRC_DIR" ]; then
+  echo "Found WebKit helper dir: $WEBKIT_SRC_DIR"
+  WEBKIT_DEST_DIR="$APPDIR${WEBKIT_SRC_DIR}"
+  mkdir -p "$WEBKIT_DEST_DIR"
+  cp -r "$WEBKIT_SRC_DIR"/* "$WEBKIT_DEST_DIR/"
+else
+  echo "WARNING: no webkit2gtk helper-process directory found on this"
+  echo "build machine — the in-app webview will likely fail to load."
+fi
+
+echo "Binary-patching hardcoded /usr paths inside bundled libwebkit*.so"
+find "$APPDIR"/usr/lib* -name 'libwebkit*' -exec sed -i -e "s|/usr|././|g" '{}' \;
+
+echo "==> 5. Packaging AppImage"
+ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "${APP_NAME}-${VERSION}-x86_64.AppImage"
 
 echo "==> Done. Look for ${APP_NAME}-${VERSION}-x86_64.AppImage in the current directory."
