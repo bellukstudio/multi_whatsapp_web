@@ -147,22 +147,24 @@ fi
 # ${HERE}/usr/share makes the bundled icon (and the gtk-update-icon-cache
 # index built for it above) discoverable.
 #
-# GTK_CSD=0: fixes the CI-built AppImage's title bar showing only a
-# close button (missing minimize/maximize). GTK draws its own title bar
-# (client-side decorations) using a button-layout read from a GSettings
-# schema; inside the bundled/AppImage environment that schema lookup can
-# come back empty, and GTK falls back to a minimal button set. Setting
-# GTK_CSD=0 tells GTK to skip drawing its own title bar and let the
-# window manager draw a normal one instead, sidestepping the lookup
-# entirely. Local builds don't show this because they run against your
-# full desktop environment, where the schema is always found.
+# GDK_BACKEND=x11: fixes the CI-built AppImage's title bar showing only
+# a close button (missing minimize/maximize) on Wayland sessions (seen
+# on Arch + KDE Plasma/KWin Wayland). GTK3 apps under native Wayland
+# negotiate window decorations via the xdg-decoration protocol; KWin's
+# Wayland fallback for that negotiation was only providing a close
+# button. Forcing GDK_BACKEND=x11 makes the app run under XWayland
+# instead, where the window manager handles decorations the normal X11
+# way and all three buttons render correctly. (GTK_CSD=0 was tried
+# first and did NOT fix this — it only affects how GTK draws its own
+# client-side decorations on X11, it doesn't change Wayland decoration
+# negotiation at all.)
 cat > "$APPDIR/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
 export GIO_EXTRA_MODULES="${HERE}/usr/lib/gio/modules:${GIO_EXTRA_MODULES:-}"
 export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-export GTK_CSD=0
+export GDK_BACKEND=x11
 cd "${HERE}/usr" || exit 1
 exec "${HERE}/usr/bin/multi_whatsapp_web" "$@"
 EOF
