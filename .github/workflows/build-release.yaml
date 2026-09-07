@@ -174,24 +174,24 @@ jobs:
 
       # FIX (build error: "unknown warning option
       # '-Wno-deprecated-literal-operator'" dengan -Werror aktif):
-      # Ubuntu 22.04's default `clang` package adalah Clang 14, yang
-      # belum mengenal flag `-Wno-deprecated-literal-operator` — flag
-      # ini mulai dipakai oleh file build Linux bawaan Flutter versi
-      # lebih baru. Karena -Werror aktif, "unknown warning option" itu
-      # jadi error build, bukan cuma warning.
+      # Percobaan pertama (install Clang 17 dari LLVM lalu set CC/CXX)
+      # ternyata tidak mempan — error yang sama persis masih muncul,
+      # yang berarti Flutter/CMake tidak benar-benar memakai compiler
+      # yang ditunjuk lewat CC/CXX di sini (entah karena llvm.sh gagal
+      # diam-diam di runner, atau toolchain Flutter memilih compiler
+      # dengan caranya sendiri).
       #
-      # Fix-nya: install Clang versi lebih baru dari repo resmi LLVM
-      # (DI SAMPING clang bawaan di atas, bukan menggantikannya), lalu
-      # arahkan CC/CXX ke situ — TANPA mengubah pin ubuntu-22.04 di atas
-      # (itu tetap dibutuhkan demi kompatibilitas glibc, lihat komentar
-      # di baris runs-on).
-      - name: Install newer Clang (untuk dukungan -Wno-deprecated-literal-operator)
+      # Pendekatan yang lebih robust: TIDAK bergantung pada compiler
+      # mana yang dipakai sama sekali. Cukup turunkan
+      # "unknown-warning-option" dari error kembali jadi warning biasa
+      # lewat CXXFLAGS/CFLAGS — compiler apa pun yang dipakai Flutter
+      # akan tetap menerima flag -Wno-deprecated-literal-operator (dan
+      # sejenisnya) sebagai warning yang diabaikan, bukan gagal build,
+      # walau compiler itu tidak mengenali nama flag-nya.
+      - name: Downgrade unknown-warning-option dari error jadi warning
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 17
-          echo "CC=/usr/bin/clang-17" >> "$GITHUB_ENV"
-          echo "CXX=/usr/bin/clang++-17" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-Wno-error=unknown-warning-option" >> "$GITHUB_ENV"
+          echo "CFLAGS=-Wno-error=unknown-warning-option" >> "$GITHUB_ENV"
 
       - uses: subosito/flutter-action@v2
         with:
