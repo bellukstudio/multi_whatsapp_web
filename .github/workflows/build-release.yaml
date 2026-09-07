@@ -172,6 +172,27 @@ jobs:
             libgtk-3-dev liblzma-dev libstdc++-12-dev libfuse2 \
             libwebkit2gtk-4.1-dev libsecret-1-dev libjsoncpp-dev
 
+      # FIX (build error: "unknown warning option
+      # '-Wno-deprecated-literal-operator'" dengan -Werror aktif):
+      # Ubuntu 22.04's default `clang` package adalah Clang 14, yang
+      # belum mengenal flag `-Wno-deprecated-literal-operator` — flag
+      # ini mulai dipakai oleh file build Linux bawaan Flutter versi
+      # lebih baru. Karena -Werror aktif, "unknown warning option" itu
+      # jadi error build, bukan cuma warning.
+      #
+      # Fix-nya: install Clang versi lebih baru dari repo resmi LLVM
+      # (DI SAMPING clang bawaan di atas, bukan menggantikannya), lalu
+      # arahkan CC/CXX ke situ — TANPA mengubah pin ubuntu-22.04 di atas
+      # (itu tetap dibutuhkan demi kompatibilitas glibc, lihat komentar
+      # di baris runs-on).
+      - name: Install newer Clang (untuk dukungan -Wno-deprecated-literal-operator)
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17
+          echo "CC=/usr/bin/clang-17" >> "$GITHUB_ENV"
+          echo "CXX=/usr/bin/clang++-17" >> "$GITHUB_ENV"
+
       - uses: subosito/flutter-action@v2
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
