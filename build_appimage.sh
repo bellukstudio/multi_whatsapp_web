@@ -103,10 +103,26 @@ PYEOF
 fi
 
 # AppRun — entry point AppImage executes.
+#
+# FIX (symbol lookup error: /usr/lib/libsecret-1.so.0: undefined symbol:
+# g_task_set_static_name, on machines other than the one it was built on):
+# LD_LIBRARY_PATH previously only pointed at ${HERE}/usr/bin/lib (the
+# Flutter bundle's own lib/ folder). linuxdeploy, run further below, copies
+# ALL auto-detected shared-library dependencies (glib, gtk, webkit2gtk,
+# libsecret, etc.) into ${HERE}/usr/lib instead — a different directory
+# that was missing from LD_LIBRARY_PATH. Since linuxdeploy does not
+# overwrite an AppRun that already exists in the AppDir, that omission
+# stuck: at runtime the app silently fell back to loading these libraries
+# from the HOST system rather than the ones bundled alongside it. On a
+# host whose libsecret was built against a different/newer glib ABI than
+# whatever glib ends up loaded, this produces exactly this undefined
+# symbol error. Adding usr/lib (checked first) makes the app consistently
+# use the bundled, mutually-compatible set of libraries instead of mixing
+# them with the host's.
 cat > "$APPDIR/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
-export LD_LIBRARY_PATH="${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
 exec "${HERE}/usr/bin/multi_whatsapp_web" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
