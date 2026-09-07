@@ -102,6 +102,21 @@ PYEOF
   fi
 fi
 
+# FIX (window/taskbar icon shows GTK's broken-image "X" placeholder
+# instead of the actual icon): GTK's icon-theme lookup for the hicolor
+# theme works reliably off a compiled icon-theme.cache index. We just
+# added/changed a file under hicolor/256x256/apps without regenerating
+# that index, so GTK can fail to resolve Icon=${APP_ID} at runtime and
+# falls back to the broken-image icon. Regenerating it here fixes that;
+# the actual XDG_DATA_DIRS lookup path fix lives in AppRun below.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -t -f "$APPDIR/usr/share/icons/hicolor" || true
+else
+  echo "WARNING: gtk-update-icon-cache not found — icon may not show"
+  echo "correctly. Install libgtk-3-bin (or gtk-update-icon-cache) on"
+  echo "the build machine to fix this."
+fi
+
 # AppRun — entry point AppImage executes.
 #
 # FIX (symbol lookup error: /usr/lib/libsecret-1.so.0: undefined symbol:
@@ -123,6 +138,15 @@ fi
 # process's current working directory, so we set that directory to
 # ${HERE}/usr here — matching where "/usr" used to point — before
 # exec'ing the real binary.
+# XDG_DATA_DIRS: without this, GTK's icon-theme lookup (which reads
+# g_get_system_data_dirs(), driven by this env var) only searches host
+# paths like /usr/share/icons — it never looks inside the AppImage's own
+# usr/share/icons/hicolor, even though our icon is right there. The
+# lookup then fails and GTK shows its broken-image "X" placeholder for
+# the window/taskbar icon instead of the real one. Prepending
+# ${HERE}/usr/share makes the bundled icon (and the gtk-update-icon-cache
+# index built for it above) discoverable.
+#
 # GTK_CSD=0: fixes the CI-built AppImage's title bar showing only a
 # close button (missing minimize/maximize). GTK draws its own title bar
 # (client-side decorations) using a button-layout read from a GSettings
@@ -137,6 +161,7 @@ cat > "$APPDIR/AppRun" << 'EOF'
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
 export GIO_EXTRA_MODULES="${HERE}/usr/lib/gio/modules:${GIO_EXTRA_MODULES:-}"
+export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export GTK_CSD=0
 cd "${HERE}/usr" || exit 1
 exec "${HERE}/usr/bin/multi_whatsapp_web" "$@"
