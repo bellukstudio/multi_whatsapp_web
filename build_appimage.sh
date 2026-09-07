@@ -123,10 +123,21 @@ fi
 # process's current working directory, so we set that directory to
 # ${HERE}/usr here — matching where "/usr" used to point — before
 # exec'ing the real binary.
+# GTK_CSD=0: fixes the CI-built AppImage's title bar showing only a
+# close button (missing minimize/maximize). GTK draws its own title bar
+# (client-side decorations) using a button-layout read from a GSettings
+# schema; inside the bundled/AppImage environment that schema lookup can
+# come back empty, and GTK falls back to a minimal button set. Setting
+# GTK_CSD=0 tells GTK to skip drawing its own title bar and let the
+# window manager draw a normal one instead, sidestepping the lookup
+# entirely. Local builds don't show this because they run against your
+# full desktop environment, where the schema is always found.
 cat > "$APPDIR/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
+export GIO_EXTRA_MODULES="${HERE}/usr/lib/gio/modules:${GIO_EXTRA_MODULES:-}"
+export GTK_CSD=0
 cd "${HERE}/usr" || exit 1
 exec "${HERE}/usr/bin/multi_whatsapp_web" "$@"
 EOF
@@ -219,6 +230,27 @@ fi
 
 echo "Binary-patching hardcoded /usr paths inside bundled libwebkit*.so"
 find "$APPDIR"/usr/lib* -name 'libwebkit*' -exec sed -i -e "s|/usr|././|g" '{}' \;
+
+# FIX ("TLS support is not available" — HTTPS pages, i.e. all of
+# WhatsApp Web, never finish loading inside the webview):
+# GIO (part of glib, used by libsoup/WebKit for networking) loads its
+# TLS backend as a runtime-discovered PLUGIN (libgiognutls.so), not as
+# a direct link-time dependency — so linuxdeploy's `ldd`-based scan
+# never bundles it, same root cause as the WebKit helper processes
+# above. Without it, GIO has no TLS implementation at all, so every
+# https:// request silently fails. Bundle the module here and point
+# GIO_EXTRA_MODULES at it in AppRun above.
+echo "==> 4c. Bundling GIO TLS backend (libgiognutls.so)"
+GIOGNUTLS_SRC="$(find /usr/lib* -name 'libgiognutls.so' 2>/dev/null | head -n1)"
+if [ -n "$GIOGNUTLS_SRC" ]; then
+  echo "Found: $GIOGNUTLS_SRC"
+  mkdir -p "$APPDIR/usr/lib/gio/modules"
+  cp "$GIOGNUTLS_SRC" "$APPDIR/usr/lib/gio/modules/"
+else
+  echo "WARNING: libgiognutls.so not found on this build machine."
+  echo "Install glib-networking (apt: gir1.2-glib-2.0 / glib-networking)"
+  echo "or HTTPS pages inside the webview will fail to load."
+fi
 
 echo "==> 5. Packaging AppImage"
 ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "${APP_NAME}-${VERSION}-x86_64.AppImage"
