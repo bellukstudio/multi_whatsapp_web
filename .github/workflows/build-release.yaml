@@ -61,6 +61,10 @@ jobs:
   build-android:
     needs: create-release
     runs-on: ubuntu-latest
+    env:
+      # GitHub Actions tidak mengizinkan context `secrets` dipakai langsung
+      # di dalam `if:` step, jadi nilainya dititipkan lewat env job dulu.
+      HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +79,7 @@ jobs:
           cache: true
 
       - name: Decode signing keystore (kalau secrets sudah diisi)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.HAS_ANDROID_KEYSTORE == 'true' }}
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/mww-keystore.jks
           cat > android/key.properties <<EOF
