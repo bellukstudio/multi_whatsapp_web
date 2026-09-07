@@ -32,10 +32,10 @@ dependencies:
   flutter_secure_storage: ^9.2.4
 
   webview_windows: 
-    path: ../flutter-webview-windows
-  #   # git:
-  #   #   url: https://github.com/Bellukchips/flutter-webview-windows.git
-  #   #   ref: main
+    # path: ../flutter-webview-windows
+    git:
+      url: https://github.com/Bellukchips/flutter-webview-windows.git
+      ref: main
   # Dipakai HANYA untuk Android/iOS (lihat MobileWebViewSessionHandle).
   # Sengaja dikunci ke versi stabil TANPA implementasi Linux, supaya
   # `flutter create --platforms=...,linux` tidak menyertakan
