@@ -5,6 +5,7 @@ import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/memory_profiler.dart';
 import '../../../data/datasources/webview/desktop/windows_webview_adapter.dart'
     show WebView2RuntimeMissingException;
+import '../../../data/datasources/webview/mobile/mobile_webview_session_handle.dart';
 import '../../../domain/entities/account.dart';
 import '../../../domain/repositories/account_repository.dart';
 import '../../../domain/repositories/webview_adapter.dart';
@@ -18,18 +19,26 @@ class SessionCubit extends Cubit<SessionState> {
     required AccountRepository accountRepository,
     required FormFactor formFactor,
     SessionPoolManager? poolManager,
+    // FIX (lock akun "kebuka" lagi begitu di-switch balik ke sana,
+    // terutama kentara di Linux — lihat SessionPoolManager.acquire()):
+    // SessionCubit sebelumnya tidak tahu apa-apa soal AccountLockCubit,
+    // jadi selalu meng-`resumeRendering()` akun manapun yang sudah warm
+    // tanpa peduli status lock-nya. Callback ini opsional (default:
+    // tidak ada akun yang locked) supaya SessionCubit tetap tidak
+    // ter-couple langsung ke AccountLockCubit — cukup diberi tahu
+    // "apakah accountId ini SEHARUSNYA masih tersembunyi di balik layar
+    // kunci sekarang", biasanya diisi dengan
+    // `accountLockCubit.isSessionLocked`.
+    bool Function(String accountId)? isAccountSessionLocked,
   }) : _webViewAdapter = webViewAdapter,
         _accountRepository = accountRepository,
         _formFactor = formFactor,
+        _isAccountSessionLocked = isAccountSessionLocked,
         _pool = formFactor == FormFactor.desktop
             ? (poolManager ??
             SessionPoolManager(
               webViewAdapter: webViewAdapter,
-              // Windows no longer needs to be capped to 1 warm session:
-              // the patched `flutter-webview-windows` plugin gives each
-              // account its own concurrently-alive WebView2 environment
-              // (see windows_webview_adapter.dart), so it can share the
-              // same default cap as macOS/Linux.
+             
             ))
             : null,
         super(const SessionState());
@@ -37,6 +46,7 @@ class SessionCubit extends Cubit<SessionState> {
   final WebViewAdapter _webViewAdapter;
   final AccountRepository _accountRepository;
   final FormFactor _formFactor;
+  final bool Function(String accountId)? _isAccountSessionLocked;
 
   final SessionPoolManager? _pool;
 
@@ -49,11 +59,12 @@ class SessionCubit extends Cubit<SessionState> {
   }
 
   Future<void> _switchToLocked(Account account) async {
-    final alreadyWarmMobile =
-        _formFactor == FormFactor.mobile &&
-            _mobileWarm.containsKey(account.id);
+  
+    final alreadyWarm = _formFactor == FormFactor.mobile
+        ? _mobileWarm.containsKey(account.id)
+        : (_pool?.isWarm(account.id) ?? false);
 
-    if (!alreadyWarmMobile) {
+    if (!alreadyWarm) {
       emit(
         state.copyWith(
           status: ActiveSessionStatus.loading,
@@ -63,10 +74,14 @@ class SessionCubit extends Cubit<SessionState> {
       );
     }
 
+    // Must stay hidden behind AccountLockedScreen even though we're
+    // switching "to" it — don't let the pool auto-show its native view.
+    final keepPaused = _isAccountSessionLocked?.call(account.id) ?? false;
+
     final WebViewSessionHandle handle;
     try {
       handle = _formFactor == FormFactor.desktop
-          ? await _pool!.acquire(account)
+          ? await _pool!.acquire(account, keepPaused: keepPaused)
           : await _switchMobile(account);
     } catch (e) {
       emit(

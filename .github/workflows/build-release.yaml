@@ -153,7 +153,15 @@ jobs:
   # ---------------------------------------------------------------
   build-linux:
     needs: create-release
-    runs-on: ubuntu-latest
+    # Sengaja PIN ke 22.04, bukan ubuntu-latest.
+    # ubuntu-latest saat ini mengarah ke Ubuntu 24.04 (glibc 2.39+), sehingga
+    # binary yang dihasilkan butuh glibc lebih baru dari yang tersedia di
+    # banyak mesin pengguna (termasuk mesin dev lokal yang glibc-nya lebih
+    # lama). AppImage TIDAK membundel glibc — ia tetap bergantung pada glibc
+    # host saat dijalankan. Build di 22.04 (glibc 2.35) jauh lebih kompatibel
+    # ke belakang. Kalau nanti perlu naik, naikkan sengaja & uji dulu, jangan
+    # biarkan "latest" naik versi diam-diam di baliknya.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 

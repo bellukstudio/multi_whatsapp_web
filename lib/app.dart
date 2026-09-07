@@ -49,10 +49,17 @@ class MultiWhatsAppWebApp extends StatelessWidget {
         ),
         BlocProvider(create: (_) => UpdateCubit(getIt<CheckForUpdate>())),
         BlocProvider(
-          create: (_) => SessionCubit(
+          create: (context) => SessionCubit(
             webViewAdapter: getIt<WebViewAdapter>(),
             accountRepository: getIt<AccountRepository>(),
             formFactor: formFactor,
+            // FIX (akun yang di-lock "kebuka" lagi begitu di-switch
+            // balik ke sana — lihat SessionPoolManager.acquire()):
+            // AccountLockCubit di-provide DI ATAS SessionCubit dalam
+            // list ini, jadi context.read di sini sudah bisa
+            // melihatnya.
+            isAccountSessionLocked: (accountId) =>
+                context.read<AccountLockCubit>().isSessionLocked(accountId),
           ),
         ),
       ],

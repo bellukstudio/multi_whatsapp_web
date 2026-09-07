@@ -77,26 +77,54 @@ class SessionPoolManager {
 
   int get warmCount => _warm.length;
 
-  Future<WebViewSessionHandle> acquire(Account account) {
-    final result = _lock.then((_) => _acquireLocked(account));
+  /// Whether [accountId] already has a warm (created & navigated) session
+  /// sitting in the pool — used to decide whether switching to it needs
+  /// to show a loading placeholder at all.
+  bool isWarm(String accountId) => _warm.containsKey(accountId);
+
+  Future<WebViewSessionHandle> acquire(
+    Account account, {
+    bool keepPaused = false,
+  }) {
+    final result = _lock.then((_) => _acquireLocked(account, keepPaused));
 
     _lock = result.then((_) {}, onError: (_) {});
     return result;
   }
 
-  Future<WebViewSessionHandle> _acquireLocked(Account account) async {
+  Future<WebViewSessionHandle> _acquireLocked(
+    Account account,
+    bool keepPaused,
+  ) async {
     final previousActiveId = _activeAccountId;
 
     print(
       '[SessionPoolManager] acquire(${account.id}) — warmCount=${_warm.length} '
       '(cap=$_maxWarmSessions), already warm=${_warm.containsKey(account.id)}, '
-      'warm ids=${_warm.keys.toList()}',
+      'warm ids=${_warm.keys.toList()}, keepPaused=$keepPaused',
     );
 
     if (_warm.containsKey(account.id)) {
       final handle = _warm.remove(account.id)!;
       _warm[account.id] = handle;
-      await handle.resumeRendering();
+      // FIX (celah keamanan lock: akun yang di-lock kembali "kebuka"
+      // begitu di-switch balik ke sana): sebelumnya baris ini SELALU
+      // dipanggil untuk akun manapun yang sudah warm, tanpa peduli
+      // apakah AccountLockCubit bilang akun ini masih harus tetap
+      // tersembunyi. Di Linux, WebKitWebView native itu overlay GTK
+      // TERPISAH di atas Flutter (lihat my_application.cc) — begitu
+      // `resumeRendering()` (`setVisible(true)`) dipanggil, kontennya
+      // langsung tampil di layar, TIDAK PEDULI widget Flutter apa yang
+      // sedang di-render di baliknya (termasuk AccountLockedScreen).
+      // Sekarang: kalau caller bilang `keepPaused` (akun ini masih
+      // harus terkunci), jangan resume sama sekali — biarkan tetap
+      // hidden persis seperti saat di-pause waktu di-lock. Nanti begitu
+      // password benar dimasukkan, `resumeRendering()` yang sudah ada
+      // di alur unlock (lihat dashboard_desktop_page.dart /
+      // dashboard_mobile_page.dart) yang akan menampilkannya.
+      if (!keepPaused) {
+        await handle.resumeRendering();
+      }
       _activeAccountId = account.id;
       _pausedSince.remove(account.id);
       await _pauseIfStillWarm(previousActiveId);
@@ -123,6 +151,15 @@ class SessionPoolManager {
       await handle.navigateToWhatsAppWeb();
     } catch (e) {
       rethrow;
+    }
+
+    if (keepPaused) {
+      // Rare edge case: switching (while locked) to an account that was
+      // never warmed up before in this run — the native view briefly
+      // exists/loads before we can hide it (unavoidable with the
+      // current per-platform adapters), but we still make sure it ends
+      // up hidden rather than left visible.
+      await handle.pauseRendering();
     }
 
     await _pauseIfStillWarm(previousActiveId);
