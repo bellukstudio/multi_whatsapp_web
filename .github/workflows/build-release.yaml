@@ -1,0 +1,181 @@
+name: Build & Release
+
+# Jalankan manual dari tab "Actions" di GitHub, masukin nomor versi.
+# Workflow ini akan:
+#   1. Buat tag git (vX.Y.Z) + GitHub Release
+#   2. Build Android (.apk)
+#   3. Build Windows (installer .exe via Inno Setup)
+#   4. Build Linux (.AppImage)
+#   5. Upload ketiga hasil build ke Release yang sama
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Nomor versi (contoh: 1.2.3, TANPA awalan v)"
+        required: true
+        type: string
+      release_notes:
+        description: "Catatan rilis (opsional)"
+        required: false
+        type: string
+        default: ""
+      prerelease:
+        description: "Tandai sebagai pre-release?"
+        required: false
+        type: boolean
+        default: false
+
+env:
+  FLUTTER_CHANNEL: "stable"
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1) Buat tag + GitHub Release kosong (nanti diisi tiap build)
+  # ---------------------------------------------------------------
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - name: Set tag name
+        id: vars
+        run: echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create/Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: "Multi WhatsApp Web ${{ steps.vars.outputs.tag }}"
+          body: ${{ inputs.release_notes }}
+          prerelease: ${{ inputs.prerelease }}
+          draft: false
+          generate_release_notes: true
+
+  # ---------------------------------------------------------------
+  # 2) Android (.apk)
+  # ---------------------------------------------------------------
+  build-android:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Decode signing keystore (kalau secrets sudah diisi)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/mww-keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=mww-keystore.jks
+          EOF
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Build APK
+        run: |
+          flutter build apk --release \
+            --build-name=${{ inputs.version }} \
+            --build-number=${{ github.run_number }}
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             out/multi_whatsapp_web_${{ inputs.version }}.apk
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: out/multi_whatsapp_web_${{ inputs.version }}.apk
+
+  # ---------------------------------------------------------------
+  # 3) Windows (installer .exe via Inno Setup)
+  # ---------------------------------------------------------------
+  build-windows:
+    needs: create-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Build Windows app
+        run: |
+          flutter build windows --release `
+            --build-name=${{ inputs.version }} `
+            --build-number=${{ github.run_number }}
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer with Inno Setup
+        env:
+          APP_VERSION: ${{ inputs.version }}
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "compiler\inno_setup_mww.iss"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: compiler/Output/*.exe
+
+  # ---------------------------------------------------------------
+  # 4) Linux (.AppImage)
+  # ---------------------------------------------------------------
+  build-linux:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev libfuse2
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Build AppImage
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          chmod +x build_appimage.sh
+          ./build_appimage.sh
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: "*.AppImage"
