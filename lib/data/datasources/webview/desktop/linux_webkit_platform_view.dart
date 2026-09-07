@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 
 class LinuxWebKitPlatformView {
-  static const _channel = MethodChannel('multi_whatsapp_web/webkit_view');
+  static const _channel = MethodChannel('multiwhatsappweb/webkit_view');
 
   static Future<void> create({
     required String viewId,
