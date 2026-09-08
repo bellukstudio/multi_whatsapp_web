@@ -94,7 +94,7 @@ jobs:
 
       - name: Build APK
         run: |
-          flutter build windows --release `
+          flutter build apk --release `
             --build-name=${{ inputs.version }} `
             --build-number=${{ github.run_number }} `
             --obfuscate `
