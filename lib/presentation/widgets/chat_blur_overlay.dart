@@ -41,7 +41,7 @@ class ChatBlurOverlay extends StatelessWidget {
                   (sessionState.handle?.supportsChatBlur ?? false))
                 const Positioned(
                   right: 16,
-                  top: 20,
+                  top: 80,
                   child: _BlurToggleButton(),
                 ),
             ],
