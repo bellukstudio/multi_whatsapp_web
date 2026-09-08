@@ -11,11 +11,8 @@ String buildChatBlurCss(
 
   const transition = 'transition: filter 0.15s ease;';
 
-  // Tiap baris chat di sidebar. Dikonfirmasi lewat DevTools:
-  // data-testid="cell-frame-container" -> 20 match di list chat aktif.
-  // (role="listitem" TIDAK dipakai WA Web versi sekarang — dulu sempat
-  // dipakai tapi sudah diganti data-testid custom.)
-  String paneSideRule() => '''
+  String paneSideRule() =>
+      '''
 #pane-side div[data-testid="cell-frame-container"] {
   filter: blur(${blurPx}px) !important;
   $transition
@@ -27,9 +24,8 @@ ${hoverReveal ? '''
 ''' : ''}
 ''';
 
-  // Nama kontak + status di header chat aktif. Selector ini yang sudah
-  // terbukti jalan dari awal — tidak diubah.
-  String headerRule() => '''
+  String headerRule() =>
+      '''
 #main header {
   filter: blur(${blurPx}px) !important;
   $transition
@@ -41,11 +37,8 @@ ${hoverReveal ? '''
 ''' : ''}
 ''';
 
-  // Tiap bubble pesan di jendela chat. Dikonfirmasi lewat DevTools:
-  // data-testid="msg-container" -> 10 match (persis jumlah bubble
-  // pesan yang ke-render, lebih presisi dibanding [role="row"] yang
-  // ikut nangkep date-separator/system message).
-  String messagesRule() => '''
+  String messagesRule() =>
+      '''
 #main div[data-testid="msg-container"] {
   filter: blur(${blurPx}px) !important;
   $transition
