@@ -10,7 +10,7 @@ APPDIR="build/AppDir"
 
 echo "==> 1. Flutter release build"
 flutter pub get
-flutter build linux --release
+flutter build linux --release --obfuscate --split-debug-info=build/linux/log_info --no-tree-shake-icons
 
 if [ ! -f "$BUNDLE_DIR/$APP_NAME" ]; then
   echo "ERROR: expected binary not found at $BUNDLE_DIR/$APP_NAME"

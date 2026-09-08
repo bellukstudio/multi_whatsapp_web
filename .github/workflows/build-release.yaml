@@ -94,9 +94,12 @@ jobs:
 
       - name: Build APK
         run: |
-          flutter build apk --release --obfuscate --split-debug-info=./log_info --no-tree-shake-icons \
-            --build-name=${{ inputs.version }} \
-            --build-number=${{ github.run_number }}
+          flutter build windows --release `
+            --build-name=${{ inputs.version }} `
+            --build-number=${{ github.run_number }} `
+            --obfuscate `
+            --split-debug-info=./log_info `
+            --no-tree-shake-icons
 
       - name: Rename APK
         run: |
@@ -131,7 +134,10 @@ jobs:
         run: |
           flutter build windows --release `
             --build-name=${{ inputs.version }} `
-            --build-number=${{ github.run_number }}
+            --build-number=${{ github.run_number }} `
+            --obfuscate `
+            --split-debug-info=build\windows\log_info `
+            --no-tree-shake-icons
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
