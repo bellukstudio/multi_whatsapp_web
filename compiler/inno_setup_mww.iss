@@ -46,7 +46,7 @@ ChangesAssociations=yes
 DisableProgramGroupPage=yes
 ; LicenseFile dihapus — tambahkan lagi kalau kamu sudah punya file lisensi,
 ; taruh misalnya di compiler\Licence.txt lalu uncomment baris di bawah:
-; LicenseFile=Licence.txt
+LicenseFile=..\Licence.txt
 OutputDir=Output
 OutputBaseFilename=multi_whatsapp_web_setup_{#MyAppVersion}
 SetupIconFile=..\assets\icon.ico
