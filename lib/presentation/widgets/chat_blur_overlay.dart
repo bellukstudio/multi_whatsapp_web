@@ -29,22 +29,9 @@ class ChatBlurOverlay extends StatelessWidget {
         return _ApplyOnHandleChange(
           handle: sessionState.handle,
           mode: state.mode,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: WebViewContainer(
-                  account: account,
-                  sessionState: sessionState,
-                ),
-              ),
-              if (account != null &&
-                  (sessionState.handle?.supportsChatBlur ?? false))
-                const Positioned(
-                  right: 16,
-                  top: 80,
-                  child: _BlurToggleButton(),
-                ),
-            ],
+          child: WebViewContainer(
+            account: account,
+            sessionState: sessionState,
           ),
         );
       },
@@ -86,100 +73,3 @@ class _ApplyOnHandleChangeState extends State<_ApplyOnHandleChange> {
   Widget build(BuildContext context) => widget.child;
 }
 
-class _BlurToggleButton extends StatelessWidget {
-  const _BlurToggleButton();
-
-  @override
-  Widget build(BuildContext context) {
-    final mode = context.watch<BlurCubit>().state.mode;
-    final isOn = mode != ChatBlurMode.off;
-
-    return Material(
-      color: Colors.black.withValues(alpha: 0.55),
-      shape: const CircleBorder(),
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: () => context.read<BlurCubit>().quickToggle(),
-        onLongPress: () => _showModePicker(context),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Icon(
-            isOn ? Icons.blur_on : Icons.blur_off,
-            color: Colors.white,
-            size: 22,
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showModePicker(BuildContext context) {
-    final cubit = context.read<BlurCubit>();
-    showModalBottomSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      builder: (sheetContext) => SafeArea(
-        child: Wrap(
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Text('Blur Chat'),
-            ),
-            _ModeTile(
-              cubit: cubit,
-              mode: ChatBlurMode.off,
-              label: 'Nonaktif',
-              icon: Icons.blur_off,
-            ),
-            _ModeTile(
-              cubit: cubit,
-              mode: ChatBlurMode.all,
-              label: 'Blur Semua',
-              icon: Icons.blur_on,
-            ),
-            _ModeTile(
-              cubit: cubit,
-              mode: ChatBlurMode.namesOnly,
-              label: 'Blur Nama Saja',
-              icon: Icons.badge_outlined,
-            ),
-            _ModeTile(
-              cubit: cubit,
-              mode: ChatBlurMode.chatContentOnly,
-              label: 'Blur Isi Chat Saja',
-              icon: Icons.chat_bubble_outline,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ModeTile extends StatelessWidget {
-  const _ModeTile({
-    required this.cubit,
-    required this.mode,
-    required this.label,
-    required this.icon,
-  });
-
-  final BlurCubit cubit;
-  final ChatBlurMode mode;
-  final String label;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final selected = cubit.state.mode == mode;
-    return ListTile(
-      leading: Icon(icon),
-      title: Text(label),
-      trailing: selected ? const Icon(Icons.check, size: 18) : null,
-      onTap: () {
-        Navigator.pop(context);
-        cubit.setMode(mode);
-      },
-    );
-  }
-}
