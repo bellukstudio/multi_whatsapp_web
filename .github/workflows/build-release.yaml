@@ -94,11 +94,11 @@ jobs:
 
       - name: Build APK
         run: |
-          flutter build apk --release `
-            --build-name=${{ inputs.version }} `
-            --build-number=${{ github.run_number }} `
-            --obfuscate `
-            --split-debug-info=./log_info `
+          flutter build apk --release \
+            --build-name=${{ inputs.version }} \
+            --build-number=${{ github.run_number }} \
+            --obfuscate \
+            --split-debug-info=./log_info \
             --no-tree-shake-icons
 
       - name: Rename APK
