@@ -7,24 +7,6 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/chat_blur_css.dart';
 import '../../../../domain/repositories/webview_adapter.dart';
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class WindowsWebViewAdapter implements WebViewAdapter {
   @override
   WebViewEngineKind get engineKind => WebViewEngineKind.webview2;
@@ -34,13 +16,6 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     return const IsolationProbeResult(
       isSupported: true,
       engine: WebViewEngineKind.webview2,
-      
-      
-      
-      
-      
-      
-      
       isNativeIsolation: true,
       reason:
       'Each account gets its own ICoreWebView2Environment (own '
@@ -56,23 +31,6 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     required String sessionPath,
     String? accountName,
   }) async {
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     try {
       await WebviewController.initializeEnvironment(
         userDataPath: sessionPath,
@@ -84,11 +42,8 @@ class WindowsWebViewAdapter implements WebViewAdapter {
           detail.contains('environment') &&
               (detail.contains('already') || detail.contains('alive'));
       if (!alreadyInitializedForThisAccount) {
-        
-        
         throw WebView2RuntimeMissingException(originalError: e);
       }
-      
     }
 
     final controller = WebviewController(environmentId: accountId);
@@ -96,16 +51,6 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     try {
       await controller.initialize();
     } on PlatformException catch (e) {
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
       const retryDelays = [Duration(milliseconds: 300), Duration(milliseconds: 800)];
 
       Object? lastError = e;
@@ -136,40 +81,15 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     required String sessionPath,
     String? accountName,
   }) {
-    
-    
     return createOrResumeSession(accountId: accountId, sessionPath: sessionPath);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 class WebView2RuntimeMissingException implements Exception {
   WebView2RuntimeMissingException({required this.originalError});
 
   final Object originalError;
 
-  
-  
-  
-  
   bool get isDispatcherQueueConflict {
     final detail = originalError.toString().toLowerCase();
     return detail.contains('dispatcherqueue') ||
@@ -225,7 +145,7 @@ class WebView2RuntimeMissingException implements Exception {
 
     return '$likelyCause\n\n'
         'Kalau sudah terpasang tapi tetap gagal, install ulang dari: '
-        'https:
+        'https://developer.microsoft.com/en-us/microsoft-edge/webview2/ '
         '(pilih "Evergreen Bootstrapper"), lalu restart aplikasi ini.\n\n'
         'Detail teknis (sertakan ini kalau minta bantuan lebih lanjut): '
         '$detail';
@@ -237,11 +157,6 @@ class WebView2RuntimeMissingException implements Exception {
 
 class WindowsWebViewSessionHandle implements WebViewSessionHandle {
   WindowsWebViewSessionHandle({required this.accountId, required this.controller}) {
-    
-    
-    
-    
-    
     _loadingStateSub = controller.loadingState.listen((state) {
       if (state == LoadingState.navigationCompleted && _lastCss != null) {
         _injectCurrentCss();
@@ -267,11 +182,6 @@ class WindowsWebViewSessionHandle implements WebViewSessionHandle {
   Future<void> navigateToWhatsAppWeb() async {
     _statusController.add(AccountConnectionStatus.connecting);
     await controller.loadUrl(AppConstants.whatsappWebUrl);
-    
-    
-    
-    
-    
   }
 
   @override
@@ -327,11 +237,7 @@ class WindowsWebViewSessionHandle implements WebViewSessionHandle {
       await controller.executeScript(
         buildChatBlurInjectionScript(_lastCss ?? ''),
       );
-    } catch (_) {
-      
-      
-      
-    }
+    } catch (_) {}
   }
 
   @override
