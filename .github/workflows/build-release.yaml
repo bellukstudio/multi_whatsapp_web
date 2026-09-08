@@ -94,7 +94,7 @@ jobs:
 
       - name: Build APK
         run: |
-          flutter build apk --release \
+          flutter build apk --release --obfuscate --split-debug-info=./log_info --no-tree-shake-icons \
             --build-name=${{ inputs.version }} \
             --build-number=${{ github.run_number }}
 
