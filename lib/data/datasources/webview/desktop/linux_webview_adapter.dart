@@ -19,8 +19,7 @@ class LinuxWebViewAdapter implements WebViewAdapter {
       isSupported: false,
       engine: WebViewEngineKind.webKitGtk,
       isNativeIsolation: true,
-      reason:
-          'Each account gets its own WebKitWebView backed by a '
+      reason: 'Each account gets its own WebKitWebView backed by a '
           'distinct WebKitWebsiteDataManager directory (native GTK, '
           'linux/webkit_multi_view_plugin.cc) — genuine per-account '
           'cookie/localStorage/IndexedDB isolation, embedded directly in '
@@ -53,10 +52,7 @@ class LinuxWebViewAdapter implements WebViewAdapter {
     required String sessionPath,
     String? accountName,
   }) {
-    return createOrResumeSession(
-      accountId: accountId,
-      sessionPath: sessionPath,
-    );
+    return createOrResumeSession(accountId: accountId, sessionPath: sessionPath);
   }
 }
 
@@ -73,7 +69,7 @@ class LinuxWebViewSessionHandle implements WebViewSessionHandle {
   String? _lastCss;
 
   final _statusController =
-      StreamController<AccountConnectionStatus>.broadcast();
+  StreamController<AccountConnectionStatus>.broadcast();
 
   @override
   Stream<AccountConnectionStatus> get statusStream => _statusController.stream;
