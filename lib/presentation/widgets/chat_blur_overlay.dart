@@ -8,12 +8,6 @@ import '../bloc/blur/blur_cubit.dart';
 import '../bloc/session/session_cubit.dart';
 import 'webview_container.dart';
 
-/// Wraps [WebViewContainer], (re)injecting the chat-privacy blur CSS
-/// into the loaded page whenever the desired [BlurCubit] mode changes,
-/// or the active session's [WebViewSessionHandle] changes (new account
-/// selected, reconnect, etc.) — and shows the floating blur-mode
-/// toggle button (bottom-left, tap to quick-toggle, long-press to pick
-/// a specific mode).
 class ChatBlurOverlay extends StatelessWidget {
   const ChatBlurOverlay({
     super.key,
@@ -43,8 +37,13 @@ class ChatBlurOverlay extends StatelessWidget {
                   sessionState: sessionState,
                 ),
               ),
-              if (account != null && (sessionState.handle?.supportsChatBlur ?? false))
-                const Positioned(left: 16, bottom: 16, child: _BlurToggleButton()),
+              if (account != null &&
+                  (sessionState.handle?.supportsChatBlur ?? false))
+                const Positioned(
+                  right: 16,
+                  top: 20,
+                  child: _BlurToggleButton(),
+                ),
             ],
           ),
         );
@@ -53,11 +52,6 @@ class ChatBlurOverlay extends StatelessWidget {
   }
 }
 
-/// Re-applies the current mode's CSS whenever [handle] changes
-/// identity — new account selected, session recreated after a
-/// reconnect, etc. The [BlocConsumer] in [ChatBlurOverlay] only reacts
-/// to the blur *mode* changing, not to the session handle changing
-/// while the mode stays the same, so this covers the other case.
 class _ApplyOnHandleChange extends StatefulWidget {
   const _ApplyOnHandleChange({
     required this.handle,

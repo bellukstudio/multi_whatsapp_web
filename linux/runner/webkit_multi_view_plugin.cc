@@ -529,12 +529,21 @@ static FlMethodResponse* HandleReload(WebkitMultiViewPlugin* self, FlValue* args
 // callback here that reads it via webkit_web_view_run_javascript_finish
 // and forwards it through an FlMethodResponse instead of returning
 // immediately below.
+// SESUDAH:
 static FlMethodResponse* HandleRunJavaScript(WebkitMultiViewPlugin* self, FlValue* args) {
     const std::string view_id = GetString(args, "viewId");
     const std::string script = GetString(args, "script");
     auto it = self->views->find(view_id);
     if (it != self->views->end() && !script.empty()) {
-        webkit_web_view_run_javascript(it->second, script.c_str(), nullptr, nullptr, nullptr);
+        webkit_web_view_evaluate_javascript(
+            it->second,
+            script.c_str(),
+            -1,        // length: -1 = script null-terminated, WebKit hitung sendiri panjangnya
+            nullptr,   // world_name: nullptr = default world (sama seperti run_javascript lama)
+            nullptr,   // source_uri: tidak relevan untuk kita, aman nullptr
+            nullptr,   // cancellable: sama seperti sebelumnya, tidak dipakai
+            nullptr,   // callback: fire-and-forget, kita tidak butuh hasilnya
+            nullptr);  // user_data
     }
     return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
 }
