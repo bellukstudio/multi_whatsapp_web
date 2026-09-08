@@ -4,8 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../../../core/constants/app_constants.dart';
-import '../../../../domain/repositories/webview_adapter.dart';
+import '../constants/app_constants.dart';
+import '../../domain/repositories/webview_adapter.dart';
+import 'chat_blur_css.dart';
 
 /// Android-only native WebView session, backed by
 /// `nativewebview/NativeWebView.kt` (a hybrid-composition PlatformView
@@ -137,6 +138,24 @@ class AndroidNativeWebViewSessionHandle implements WebViewSessionHandle {
   Future<void> clearSessionData() async {
     await _call('clearCache');
     await _call('clearCookies');
+  }
+
+  @override
+  bool get supportsChatBlur => true;
+
+  @override
+  Future<void> setChatBlurCss(String? css) async {
+    // Same-process, so — unlike the current cross-process SlotEmbed
+    // approach this app actually ships with — the 'evaluateJavascript'
+    // channel call already used by setDesktopMode() above is available
+    // here too.
+    try {
+      await _call('evaluateJavascript', {
+        'script': buildChatBlurInjectionScript(css ?? ''),
+      });
+    } catch (_) {
+      // Best-effort, same as the other adapters.
+    }
   }
 
   @override

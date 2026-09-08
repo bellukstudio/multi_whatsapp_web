@@ -10,8 +10,8 @@ import '../../bloc/lock/account_lock_cubit.dart';
 import '../../bloc/session/session_cubit.dart';
 import '../../widgets/account_lock_dialogs.dart';
 import '../../widgets/account_locked_screen.dart';
+import '../../widgets/chat_blur_overlay.dart';
 import '../../widgets/sidebar.dart';
-import '../../widgets/webview_container.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
@@ -123,7 +123,7 @@ class DashboardDesktopPage extends StatelessWidget {
                                         ),
                                       );
                                     }
-                                    return WebViewContainer(
+                                    return ChatBlurOverlay(
                                       account: activeAccount,
                                       sessionState: sessionState,
                                     );

@@ -12,7 +12,7 @@ import '../../bloc/session/session_cubit.dart';
 import '../../widgets/account_lock_dialogs.dart';
 import '../../widgets/account_locked_screen.dart';
 import '../../widgets/account_switcher_bottom.dart';
-import '../../widgets/webview_container.dart';
+import '../../widgets/chat_blur_overlay.dart';
 import '../shared/add_account_page.dart';
 import '../shared/settings_page.dart';
 
@@ -116,7 +116,7 @@ class _DashboardMobilePageState extends State<DashboardMobilePage>
                               ),
                             );
                           }
-                          return WebViewContainer(
+                          return ChatBlurOverlay(
                             account: activeAccount,
                             sessionState: sessionState,
                           );

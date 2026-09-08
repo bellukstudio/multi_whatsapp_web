@@ -45,6 +45,16 @@ class LinuxWebKitPlatformView {
     return _channel.invokeMethod('reload', {'viewId': viewId});
   }
 
+  static Future<void> runJavaScript({
+    required String viewId,
+    required String script,
+  }) {
+    return _channel.invokeMethod('runJavaScript', {
+      'viewId': viewId,
+      'script': script,
+    });
+  }
+
   static Future<void> destroy({required String viewId}) {
     return _channel.invokeMethod('destroy', {'viewId': viewId});
   }

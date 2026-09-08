@@ -95,6 +95,16 @@ class NativeProcessWebViewSessionHandle implements WebViewSessionHandle {
   }
 
   @override
+  bool get supportsChatBlur => false;
+
+  @override
+  Future<void> setChatBlurCss(String? css) async {
+    // Not currently used by any active platform (see WebViewContainer's
+    // _MobileEngineSurface — only SlotEmbedWebViewSessionHandle is
+    // actually rendered), so left as a no-op.
+  }
+
+  @override
   Future<void> dispose() async {
     await _statusController.close();
   }

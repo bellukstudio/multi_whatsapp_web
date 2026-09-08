@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/utils/chat_blur_css.dart';
 import '../../../../domain/repositories/webview_adapter.dart';
 import 'linux_webkit_platform_view.dart';
 
@@ -168,6 +169,25 @@ class LinuxWebViewSessionHandle implements WebViewSessionHandle {
     if (await dir.exists()) {
       await dir.delete(recursive: true);
       await dir.create(recursive: true);
+    }
+  }
+
+  @override
+  bool get supportsChatBlur => true;
+
+  @override
+  Future<void> setChatBlurCss(String? css) async {
+    if (!_created || _disposed) return;
+    try {
+      await LinuxWebKitPlatformView.runJavaScript(
+        viewId: accountId,
+        script: buildChatBlurInjectionScript(css ?? ''),
+      );
+    } catch (_) {
+      // Best-effort — e.g. the WebProcess just got killed/respawned by
+      // the memory watchdog in webkit_multi_view_plugin.cc; the next
+      // mode change (or navigateToWhatsAppWeb's own re-injection point,
+      // once added) will retry.
     }
   }
 

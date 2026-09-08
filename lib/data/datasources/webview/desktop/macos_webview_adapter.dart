@@ -135,6 +135,18 @@ class _MacOSSessionHandle implements WebViewSessionHandle {
   }
 
   @override
+  bool get supportsChatBlur => false;
+
+  @override
+  Future<void> setChatBlurCss(String? css) async {
+    // TODO: same native-bridge gap as the rest of this stub (see class
+    // doc + createOrResumeSession above) — once a real WKWebView bridge
+    // exists, wire this via `WKWebView.evaluateJavaScript:` and
+    // `buildChatBlurInjectionScript()` from chat_blur_css.dart, same
+    // pattern as the Windows/Linux adapters.
+  }
+
+  @override
   Future<void> dispose() async {
     await _statusController.close();
   }

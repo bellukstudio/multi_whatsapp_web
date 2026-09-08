@@ -4,6 +4,7 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:webview_windows/webview_windows.dart';
 
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/utils/chat_blur_css.dart';
 import '../../../../domain/repositories/webview_adapter.dart';
 
 /// PRD §24 row 1 — Windows / WebView2 via `webview_flutter_windows`
@@ -293,6 +294,22 @@ class WindowsWebViewSessionHandle implements WebViewSessionHandle {
   Future<void> clearSessionData() async {
     await controller.clearCache();
     await controller.clearCookies();
+  }
+
+  @override
+  bool get supportsChatBlur => true;
+
+  @override
+  Future<void> setChatBlurCss(String? css) async {
+    if (_disposed) return;
+    try {
+      await controller.executeScript(
+        buildChatBlurInjectionScript(css ?? ''),
+      );
+    } catch (_) {
+      // Best-effort — a failed injection (e.g. page mid-navigation)
+      // shouldn't crash the app; the next mode change will retry.
+    }
   }
 
   @override

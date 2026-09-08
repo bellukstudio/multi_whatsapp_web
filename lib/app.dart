@@ -15,6 +15,7 @@ import 'domain/usecases/get_accounts.dart';
 import 'domain/usecases/logout_account.dart';
 import 'domain/usecases/rename_account.dart';
 import 'presentation/bloc/account/account_bloc.dart';
+import 'presentation/bloc/blur/blur_cubit.dart';
 import 'presentation/bloc/lock/account_lock_cubit.dart';
 import 'presentation/bloc/session/session_cubit.dart';
 import 'presentation/bloc/theme/theme_cubit.dart';
@@ -48,6 +49,7 @@ class MultiWhatsAppWebApp extends StatelessWidget {
           create: (_) => AccountLockCubit(getIt<AccountLockLocalDatasource>()),
         ),
         BlocProvider(create: (_) => UpdateCubit(getIt<CheckForUpdate>())),
+        BlocProvider(create: (_) => BlurCubit()),
         BlocProvider(
           create: (context) => SessionCubit(
             webViewAdapter: getIt<WebViewAdapter>(),

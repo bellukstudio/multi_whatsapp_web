@@ -106,6 +106,23 @@ class SlotEmbedWebViewSessionHandle implements WebViewSessionHandle {
   }
 
   @override
+  bool get supportsChatBlur => false;
+
+  @override
+  Future<void> setChatBlurCss(String? css) async {
+    // TODO: same cross-process gap as clearSessionData() above — the
+    // WebView lives in a separate `android:process`
+    // (WebViewSlotService), reached only through the Messenger IPC
+    // already used for MSG_RELEASE. Wiring this needs: (1) a new
+    // message type here (e.g. MSG_RUN_JS carrying the script string),
+    // (2) WebViewSlotService.kt handling it with
+    // `webView.evaluateJavascript(script, null)`, and (3) using
+    // `buildChatBlurInjectionScript()` from chat_blur_css.dart to build
+    // the script, exactly like the Windows/Linux adapters do. Left out
+    // of this first pass — ask if you need this next.
+  }
+
+  @override
   Future<void> dispose() async {
     await unloadFromMemory();
     await _statusController.close();

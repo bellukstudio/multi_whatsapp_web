@@ -73,6 +73,23 @@ abstract class WebViewSessionHandle {
   /// (used by "Logout account", PRD §12) but keeps the account entry.
   Future<void> clearSessionData();
 
+  /// Whether [setChatBlurCss] actually does anything on this
+  /// platform/engine right now. The chat-privacy blur feature (see
+  /// `chat_blur_css.dart` + `ChatBlurCubit`) works by injecting a
+  /// `<style>` tag into the loaded WhatsApp Web page itself — which
+  /// requires a JS-execution bridge into the page. Not every
+  /// [WebViewSessionHandle] implementation has one wired up yet; those
+  /// that don't must report `false` here and make [setChatBlurCss] a
+  /// no-op, so the UI can grey the feature out instead of silently
+  /// doing nothing.
+  bool get supportsChatBlur;
+
+  /// Injects [css] as a `<style id="mww-chat-blur">` tag into the
+  /// loaded page, replacing any previously-injected one. Pass `null`
+  /// or an empty string to remove the blur. Safe to call repeatedly
+  /// (e.g. every time the desired mode changes, or a new page loads).
+  Future<void> setChatBlurCss(String? css);
+
   Future<void> dispose();
 }
 

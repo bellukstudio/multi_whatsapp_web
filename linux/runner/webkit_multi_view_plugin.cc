@@ -521,6 +521,24 @@ static FlMethodResponse* HandleReload(WebkitMultiViewPlugin* self, FlValue* args
     return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
 }
 
+// Injects arbitrary JS into the loaded page — used by the chat-privacy
+// blur feature (see chat_blur_css.dart on the Dart side) to install a
+// <style> tag. Fire-and-forget: we pass a null GAsyncReadyCallback
+// because none of our current callers need a result back, only the
+// side effect. If a future caller needs the JS's return value, add a
+// callback here that reads it via webkit_web_view_run_javascript_finish
+// and forwards it through an FlMethodResponse instead of returning
+// immediately below.
+static FlMethodResponse* HandleRunJavaScript(WebkitMultiViewPlugin* self, FlValue* args) {
+    const std::string view_id = GetString(args, "viewId");
+    const std::string script = GetString(args, "script");
+    auto it = self->views->find(view_id);
+    if (it != self->views->end() && !script.empty()) {
+        webkit_web_view_run_javascript(it->second, script.c_str(), nullptr, nullptr, nullptr);
+    }
+    return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+}
+
 // --- BOILERPLATE INFRASTRUCTURE ---
 
 static void MethodCallCb(FlMethodChannel* channel, FlMethodCall* method_call, gpointer user_data) {
@@ -537,6 +555,8 @@ static void MethodCallCb(FlMethodChannel* channel, FlMethodCall* method_call, gp
         response = HandleSetVisible(self, args);
     } else if (g_strcmp0(method, "reload") == 0) {
         response = HandleReload(self, args);
+    } else if (g_strcmp0(method, "runJavaScript") == 0) {
+        response = HandleRunJavaScript(self, args);
     } else if (g_strcmp0(method, "destroy") == 0) {
         response = HandleDestroy(self, args);
     } else {
