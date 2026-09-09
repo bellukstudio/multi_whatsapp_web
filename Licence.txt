@@ -1,5 +1,5 @@
                     LISENSI PUBLIK UMUM GNU
-                       Versi 3, 29 Juni 2007
+                Versi 1.0.14, 9 September 2026
 
  Hak cipta (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
  Setiap orang diperbolehkan untuk menyalin dan mendistribusikan salinan persisnya.
