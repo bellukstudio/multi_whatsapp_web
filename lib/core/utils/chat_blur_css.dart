@@ -11,21 +11,21 @@ String buildChatBlurCss(
 
   const transition = 'transition: filter 0.15s ease;';
 
-  String paneSideRule() =>
-      '''
-#pane-side div[data-testid="cell-frame-container"] {
+  String paneSideRule() => '''
+#pane-side div[data-testid="cell-frame-container"],
+#pane-side div[data-testid="message-yourself-row"] {
   filter: blur(${blurPx}px) !important;
   $transition
 }
 ${hoverReveal ? '''
-#pane-side div[data-testid="cell-frame-container"]:hover {
+#pane-side div[data-testid="cell-frame-container"]:hover,
+#pane-side div[data-testid="message-yourself-row"]:hover {
   filter: blur(0px) !important;
 }
 ''' : ''}
 ''';
 
-  String headerRule() =>
-      '''
+  String headerRule() => '''
 #main header {
   filter: blur(${blurPx}px) !important;
   $transition
@@ -37,8 +37,7 @@ ${hoverReveal ? '''
 ''' : ''}
 ''';
 
-  String messagesRule() =>
-      '''
+  String messagesRule() => '''
 #main div[data-testid="msg-container"] {
   filter: blur(${blurPx}px) !important;
   $transition
