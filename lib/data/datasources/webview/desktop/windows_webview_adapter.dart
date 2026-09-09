@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/services.dart' show PlatformException;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:webview_windows/webview_windows.dart';
 
 import '../../../../core/constants/app_constants.dart';
@@ -25,6 +28,23 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     );
   }
 
+  /// [sessionPath] on the Account entity (e.g. `sessions/<uuid>`) is a
+  /// path *relative* to the app's own data directory — it is NOT an
+  /// absolute path. Resolving it here (same pattern as
+  /// LinuxWebViewAdapter._resolveDataDir) is required: without this,
+  /// `userDataPath` below would be resolved by WebView2 relative to
+  /// the process's current working directory, which for an installed
+  /// Windows app is often NOT writable by a normal user (e.g. under
+  /// `Program Files`) — surfacing to the user as "Microsoft Edge
+  /// tidak bisa mengakses folder session" the first time a brand-new
+  /// account's folder needs to be created.
+  Future<String> _resolveDataDir(String sessionPath) async {
+    final supportDir = await getApplicationSupportDirectory();
+    final absolute = p.join(supportDir.path, sessionPath);
+    await Directory(absolute).create(recursive: true);
+    return absolute;
+  }
+
   @override
   Future<WebViewSessionHandle> createOrResumeSession({
     required String accountId,
@@ -32,8 +52,9 @@ class WindowsWebViewAdapter implements WebViewAdapter {
     String? accountName,
   }) async {
     try {
+      final absoluteDataDir = await _resolveDataDir(sessionPath);
       await WebviewController.initializeEnvironment(
-        userDataPath: sessionPath,
+        userDataPath: absoluteDataDir,
         environmentId: accountId,
       );
     } on PlatformException catch (e) {
