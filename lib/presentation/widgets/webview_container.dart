@@ -106,6 +106,21 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
   ModalRoute<void>? _subscribedRoute;
 
   @override
+  void initState() {
+    super.initState();
+    // TODO(debug): remove once file-drop-into-WhatsApp-Web is
+    // confirmed working end-to-end. Auto-opens WebView2 DevTools so
+    // any JS error WhatsApp Web's *own* code throws while handling
+    // the synthetic drop (which our injection script's try/catch
+    // can't see) is visible in the Console tab without extra steps.
+    if (kDebugMode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.handle.controller.openDevTools();
+      });
+    }
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final route = ModalRoute.of(context);
