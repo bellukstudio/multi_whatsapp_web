@@ -192,9 +192,14 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     }
 
     if (!mounted) return;
-    await widget.handle.controller.executeScript(
+    final diagnostics = await widget.handle.controller.executeScript(
       buildFileDropInjectionScript(payloads),
     );
+    // TODO(debug): remove once file-drop-into-WhatsApp-Web is confirmed
+    // working end-to-end. Check for `defaultPrevented: true` on the
+    // `drop` entries — that's the signal some page listener actually
+    // handled the synthetic event rather than it landing on nothing.
+    debugPrint('[file-drop] injection diagnostics: $diagnostics');
   }
 }
 

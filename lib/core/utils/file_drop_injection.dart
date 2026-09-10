@@ -45,6 +45,13 @@ class DroppedFilePayload {
 /// If a future WhatsApp Web redesign narrows this to a more specific
 /// container, retarget accordingly — same pattern as the chat-blur
 /// selectors in chat_blur_css.dart.
+///
+/// Returns a diagnostics object (auto-serialized to JSON by
+/// `executeScript`) instead of nothing, so the caller can `debugPrint`
+/// it and see, per (event type, target) pair, whether any page
+/// listener called `preventDefault()` — the standard signal that a
+/// drop handler actually processed the synthetic event — without
+/// needing to open WebView2 DevTools separately.
 String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
   final filesJson = jsonEncode(files
       .map((f) => {
@@ -56,8 +63,10 @@ String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
 
   return '''
 (function() {
+  var diag = { ok: false, error: null, fileCount: 0, types: [], results: [] };
   try {
     var payload = $filesJson;
+    diag.fileCount = payload.length;
     var fileObjects = payload.map(function(f) {
       var binary = atob(f.bytesBase64);
       var bytes = new Uint8Array(binary.length);
@@ -69,21 +78,33 @@ String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
 
     var dataTransfer = new DataTransfer();
     fileObjects.forEach(function(f) { dataTransfer.items.add(f); });
+    diag.types = Array.prototype.slice.call(dataTransfer.types);
 
-    var targets = [document.body, window];
+    var targets = [
+      { label: 'document.body', node: document.body },
+      { label: 'window', node: window }
+    ];
     ['dragenter', 'dragover', 'drop'].forEach(function(type) {
-      targets.forEach(function(target) {
+      targets.forEach(function(t) {
         var event = new DragEvent(type, {
           bubbles: true,
           cancelable: true,
           dataTransfer: dataTransfer,
         });
-        target.dispatchEvent(event);
+        var notCanceled = t.node.dispatchEvent(event);
+        diag.results.push({
+          type: type,
+          target: t.label,
+          defaultPrevented: event.defaultPrevented,
+          dispatchReturnedTrue: notCanceled
+        });
       });
     });
+    diag.ok = true;
   } catch (e) {
-    console.error('mww file drop injection failed', e);
+    diag.error = String(e && e.stack ? e.stack : e);
   }
+  return diag;
 })();
 ''';
 }
