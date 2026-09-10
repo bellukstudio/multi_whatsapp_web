@@ -359,21 +359,33 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
     // cuma "saran buang cache" seperti versi sebelumnya). Begitu WebProcess
     // lewat WEB_PROCESS_KILL_THRESHOLD * WEB_PROCESS_MEMORY_LIMIT_MB, WebKit
     // membunuh proses itu -> ditangkap di OnWebProcessTerminated -> di-reload.
+    //
+    // PENTING: settings ini HARUS di-pass sebagai construct-property
+    // "memory-pressure-settings" saat WebKitWebContext dibuat lewat
+    // g_object_new. webkit_website_data_manager_set_memory_pressure_settings()
+    // (dipakai versi sebelumnya) TIDAK menyentuh WebProcess sama sekali --
+    // itu cuma berlaku untuk NetworkProcess (HTTP fetch/cookies/disk cache).
+    // Perbedaan ini gampang kelewat karena nama fungsinya mirip dan
+    // sama-sama tidak error/warning kalau salah pakai.
     WebKitMemoryPressureSettings* mem_settings = webkit_memory_pressure_settings_new();
     webkit_memory_pressure_settings_set_memory_limit(mem_settings, WEB_PROCESS_MEMORY_LIMIT_MB);
     webkit_memory_pressure_settings_set_conservative_threshold(mem_settings, WEB_PROCESS_CONSERVATIVE_THRESHOLD);
     webkit_memory_pressure_settings_set_strict_threshold(mem_settings, WEB_PROCESS_STRICT_THRESHOLD);
     webkit_memory_pressure_settings_set_kill_threshold(mem_settings, WEB_PROCESS_KILL_THRESHOLD);
     webkit_memory_pressure_settings_set_poll_interval(mem_settings, WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS);
-    webkit_website_data_manager_set_memory_pressure_settings(mem_settings);
-    webkit_memory_pressure_settings_free(mem_settings);
 
     WebKitWebsiteDataManager* data_manager = webkit_website_data_manager_new(
             "base-data-directory", data_dir.c_str(),
             "base-cache-directory", data_dir.c_str(),
             nullptr);
 
-    WebKitWebContext* web_context = webkit_web_context_new_with_website_data_manager(data_manager);
+    WebKitWebContext* web_context = WEBKIT_WEB_CONTEXT(g_object_new(
+        WEBKIT_TYPE_WEB_CONTEXT,
+        "website-data-manager", data_manager,
+        "memory-pressure-settings", mem_settings,
+        nullptr));
+
+    webkit_memory_pressure_settings_free(mem_settings);
 
     // DOCUMENT_VIEWER paling hemat: tidak menyimpan riwayat back/forward di RAM.
     webkit_web_context_set_cache_model(web_context, WEBKIT_CACHE_MODEL_DOCUMENT_VIEWER);
