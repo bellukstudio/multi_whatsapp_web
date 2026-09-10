@@ -12,14 +12,14 @@ String buildChatBlurCss(
   const transition = 'transition: filter 0.15s ease;';
 
   String paneSideRule() => '''
-#pane-side div[data-testid="cell-frame-container"],
-#pane-side div[data-testid="message-yourself-row"] {
+div[data-testid="cell-frame-container"],
+div[data-testid="message-yourself-row"] {
   filter: blur(${blurPx}px) !important;
   $transition
 }
 ${hoverReveal ? '''
-#pane-side div[data-testid="cell-frame-container"]:hover,
-#pane-side div[data-testid="message-yourself-row"]:hover {
+div[data-testid="cell-frame-container"]:hover,
+div[data-testid="message-yourself-row"]:hover {
   filter: blur(0px) !important;
 }
 ''' : ''}
