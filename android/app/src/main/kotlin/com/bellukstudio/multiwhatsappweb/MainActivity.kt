@@ -12,7 +12,7 @@ class MainActivity : FlutterActivity() {
             .platformViewsController
             .registry
             .registerViewFactory(
-                "multiwhatsappweb/slot_embed",
+                "multi_whatsapp_web/slot_embed",
                 SlotEmbedViewFactory(flutterEngine.dartExecutor.binaryMessenger),
             )
     }
