@@ -192,13 +192,36 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     }
 
     if (!mounted) return;
+
+    // Convert the drop position from Flutter's global coordinate space
+    // to a position local to this widget (the webview surface), so the
+    // injected script can target the actual DOM element under the
+    // cursor via `document.elementFromPoint`. This matters because
+    // dragenter/dragover/drop only bubble *upward* from the dispatch
+    // target: dispatching on document.body/window can only ever reach
+    // listeners attached to body/document/window themselves, never a
+    // drop-zone element WhatsApp Web registers deeper in the DOM (e.g.
+    // scoped to the open chat panel). Landing on the real element
+    // under the cursor lets the event bubble through its actual
+    // ancestor chain instead.
+    Offset? localPoint;
+    final renderObject = context.findRenderObject();
+    if (renderObject is RenderBox && renderObject.attached) {
+      localPoint = renderObject.globalToLocal(detail.globalPosition);
+    }
+
     final diagnostics = await widget.handle.controller.executeScript(
-      buildFileDropInjectionScript(payloads),
+      buildFileDropInjectionScript(
+        payloads,
+        pointX: localPoint?.dx,
+        pointY: localPoint?.dy,
+      ),
     );
     // TODO(debug): remove once file-drop-into-WhatsApp-Web is confirmed
-    // working end-to-end. Check for `defaultPrevented: true` on the
-    // `drop` entries — that's the signal some page listener actually
-    // handled the synthetic event rather than it landing on nothing.
+    // working end-to-end. Check `pointTargetTag` to see what element
+    // was actually under the cursor, and `defaultPrevented: true` on
+    // its `drop` entry — that's the signal its own listener (or an
+    // ancestor's) handled the synthetic event.
     debugPrint('[file-drop] injection diagnostics: $diagnostics');
   }
 }

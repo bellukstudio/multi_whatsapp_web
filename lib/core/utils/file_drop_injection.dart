@@ -46,13 +46,30 @@ class DroppedFilePayload {
 /// container, retarget accordingly — same pattern as the chat-blur
 /// selectors in chat_blur_css.dart.
 ///
+/// [pointX]/[pointY], when provided, are the drop position in CSS
+/// pixels local to the webview surface (i.e. the same space
+/// `document.elementFromPoint` expects). The script uses them to find
+/// the actual DOM element that was under the cursor at drop time and
+/// dispatches there first — critical because dragenter/dragover/drop
+/// only bubble *upward* from the dispatch target, so a page-specific
+/// drop-zone element nested inside the app (e.g. scoped to the open
+/// chat panel) can only ever be reached by starting the dispatch at
+/// or below it, never by dispatching on `document.body`/`window`
+/// (which sit above it in the tree). `document.body` and `window` are
+/// still dispatched to afterward as a fallback/safety net.
+///
 /// Returns a diagnostics object (auto-serialized to JSON by
 /// `executeScript`) instead of nothing, so the caller can `debugPrint`
-/// it and see, per (event type, target) pair, whether any page
-/// listener called `preventDefault()` — the standard signal that a
-/// drop handler actually processed the synthetic event — without
-/// needing to open WebView2 DevTools separately.
-String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
+/// it and see which element was actually targeted (`pointTargetTag`)
+/// and, per (event type, target) pair, whether any page listener
+/// called `preventDefault()` — the standard signal that a drop
+/// handler actually processed the synthetic event — without needing
+/// to open WebView2 DevTools separately.
+String buildFileDropInjectionScript(
+  List<DroppedFilePayload> files, {
+  double? pointX,
+  double? pointY,
+}) {
   final filesJson = jsonEncode(files
       .map((f) => {
             'name': f.name,
@@ -61,9 +78,16 @@ String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
           })
       .toList());
 
+  final pointLookup = (pointX != null && pointY != null)
+      ? 'pointTarget = document.elementFromPoint($pointX, $pointY);'
+      : '';
+
   return '''
 (function() {
-  var diag = { ok: false, error: null, fileCount: 0, types: [], results: [] };
+  var diag = {
+    ok: false, error: null, fileCount: 0, types: [],
+    results: [], pointTargetTag: null
+  };
   try {
     var payload = $filesJson;
     diag.fileCount = payload.length;
@@ -80,10 +104,20 @@ String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
     fileObjects.forEach(function(f) { dataTransfer.items.add(f); });
     diag.types = Array.prototype.slice.call(dataTransfer.types);
 
-    var targets = [
-      { label: 'document.body', node: document.body },
-      { label: 'window', node: window }
-    ];
+    var pointTarget = null;
+    $pointLookup
+    if (pointTarget) {
+      var cls = pointTarget.className
+        ? '.' + String(pointTarget.className).trim().split(/\\s+/).join('.')
+        : '';
+      diag.pointTargetTag = pointTarget.tagName + cls;
+    }
+
+    var targets = [];
+    if (pointTarget) targets.push({ label: 'pointTarget', node: pointTarget });
+    targets.push({ label: 'document.body', node: document.body });
+    targets.push({ label: 'window', node: window });
+
     ['dragenter', 'dragover', 'drop'].forEach(function(type) {
       targets.forEach(function(t) {
         var event = new DragEvent(type, {
