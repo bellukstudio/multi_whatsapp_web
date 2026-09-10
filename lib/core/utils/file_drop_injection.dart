@@ -33,13 +33,18 @@ class DroppedFilePayload {
 /// functional drop, without needing any native changes to the
 /// WebView2 plugin itself.
 ///
-/// NOTE: dispatches on `document.body` rather than a specific
-/// drop-zone element, since WhatsApp Web's own drop handling responds
-/// to a drop anywhere over the app (it shows a full-window "Drop here"
-/// overlay). If a future WhatsApp Web redesign narrows that to a more
-/// specific container, retarget this to that container's selector
-/// instead — same pattern as the chat-blur selectors in
-/// chat_blur_css.dart.
+/// NOTE: dispatches on both `document.body` and `window` rather than a
+/// specific drop-zone element, since WhatsApp Web's own drop handling
+/// responds to a drop anywhere over the app (it shows a full-window
+/// "Drop here" overlay). `window` is included explicitly because
+/// WhatsApp Web has been observed (via DevTools `getEventListeners`)
+/// to attach its `dragover`/`drop` listeners directly to `window`
+/// rather than `document` or `document.body` — those two elements had
+/// no listeners at all. Dispatching on `document.body` alone should
+/// still bubble up to `window`, but firing on both is cheap insurance.
+/// If a future WhatsApp Web redesign narrows this to a more specific
+/// container, retarget accordingly — same pattern as the chat-blur
+/// selectors in chat_blur_css.dart.
 String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
   final filesJson = jsonEncode(files
       .map((f) => {
@@ -65,14 +70,16 @@ String buildFileDropInjectionScript(List<DroppedFilePayload> files) {
     var dataTransfer = new DataTransfer();
     fileObjects.forEach(function(f) { dataTransfer.items.add(f); });
 
-    var target = document.body;
+    var targets = [document.body, window];
     ['dragenter', 'dragover', 'drop'].forEach(function(type) {
-      var event = new DragEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        dataTransfer: dataTransfer,
+      targets.forEach(function(target) {
+        var event = new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dataTransfer,
+        });
+        target.dispatchEvent(event);
       });
-      target.dispatchEvent(event);
     });
   } catch (e) {
     console.error('mww file drop injection failed', e);
