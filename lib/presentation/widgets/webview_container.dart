@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:desktop_drop/desktop_drop.dart';
@@ -11,7 +10,6 @@ import 'package:webview_windows/webview_windows.dart' as win;
 
 import '../../app.dart' show desktopWebViewRouteObserver;
 import '../../core/utils/app_restarter.dart';
-import '../../core/utils/file_drop_injection.dart';
 import '../../data/datasources/webview/desktop/linux_webview_adapter.dart';
 import '../../data/datasources/webview/desktop/linux_webkit_platform_view.dart';
 import '../../data/datasources/webview/desktop/windows_webview_adapter.dart';
@@ -103,7 +101,13 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     with RouteAware {
   bool _mounted = true;
   bool _dragging = false;
+  Timer? _dragExitTimer;
   ModalRoute<void>? _subscribedRoute;
+
+  @override
+  void initState() {
+    super.initState();
+  }
 
   @override
   void didChangeDependencies() {
@@ -134,6 +138,7 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
 
   @override
   void dispose() {
+    _dragExitTimer?.cancel();
     if (_subscribedRoute != null) {
       desktopWebViewRouteObserver.unsubscribe(this);
     }
@@ -145,10 +150,14 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     if (!_mounted) {
       return const SizedBox.shrink();
     }
-    
+
     return DropTarget(
-      onDragEntered: (_) => setState(() => _dragging = true),
-      onDragExited: (_) => setState(() => _dragging = false),
+      // A Windows platform view can briefly make desktop_drop report a drag
+      // exit while the cursor is still over this surface. Do not immediately
+      // clear the state: that transient exit made the drag/attachment preview
+      // flicker on and off.
+      onDragEntered: _handleDragEntered,
+      onDragExited: _handleDragExited,
       onDragDone: _handleDrop,
       child: Stack(
         fit: StackFit.expand,
@@ -175,54 +184,51 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     );
   }
 
+  void _handleDragEntered(DropEventDetails _) {
+    _dragExitTimer?.cancel();
+    if (!_dragging && mounted) {
+      setState(() => _dragging = true);
+    }
+  }
+
+  void _handleDragExited(DropEventDetails _) {
+    _dragExitTimer?.cancel();
+    // Keep the indicator during a transient platform-view boundary crossing.
+    // A real exit remains hidden after this short grace period.
+    _dragExitTimer = Timer(const Duration(milliseconds: 180), () {
+      if (mounted && _dragging) {
+        setState(() => _dragging = false);
+      }
+    });
+  }
+
+  // Sends the drop through WebView2's native drag-and-drop pipeline. Unlike
+  // DOM events or a file-picker automation, WhatsApp receives a trusted
+  // CF_HDROP payload at the point where the user released the files.
   Future<void> _handleDrop(DropDoneDetails detail) async {
     if (detail.files.isEmpty) return;
-    setState(() => _dragging = false);
-
-    final payloads = <DroppedFilePayload>[];
-    for (final file in detail.files) {
-      final bytes = await file.readAsBytes();
-      payloads.add(
-        DroppedFilePayload(
-          name: file.name,
-          mimeType: file.mimeType ?? guessMimeType(file.name),
-          bytesBase64: base64Encode(bytes),
-        ),
-      );
+    _dragExitTimer?.cancel();
+    if (_dragging && mounted) {
+      setState(() => _dragging = false);
     }
-
     if (!mounted) return;
 
-    // Convert the drop position from Flutter's global coordinate space
-    // to a position local to this widget (the webview surface), so the
-    // injected script can target the actual DOM element under the
-    // cursor via `document.elementFromPoint`. This matters because
-    // dragenter/dragover/drop only bubble *upward* from the dispatch
-    // target: dispatching on document.body/window can only ever reach
-    // listeners attached to body/document/window themselves, never a
-    // drop-zone element WhatsApp Web registers deeper in the DOM (e.g.
-    // scoped to the open chat panel). Landing on the real element
-    // under the cursor lets the event bubble through its actual
-    // ancestor chain instead.
-    Offset? localPoint;
     final renderObject = context.findRenderObject();
-    if (renderObject is RenderBox && renderObject.attached) {
-      localPoint = renderObject.globalToLocal(detail.globalPosition);
+    if (renderObject is! RenderBox || !renderObject.attached) {
+      debugPrint('[file-drop] webview bounds are unavailable.');
+      return;
     }
 
-    final diagnostics = await widget.handle.controller.executeScript(
-      buildFileDropInjectionScript(
-        payloads,
-        pointX: localPoint?.dx,
-        pointY: localPoint?.dy,
-      ),
+    final point = renderObject.globalToLocal(detail.globalPosition);
+    final accepted = await widget.handle.controller.dropFile(
+      detail.files.map((file) => file.path).toList(growable: false),
+      point.dx,
+      point.dy,
     );
-    // TODO(debug): remove once file-drop-into-WhatsApp-Web is confirmed
-    // working end-to-end. Check `pointTargetTag` to see what element
-    // was actually under the cursor, and `defaultPrevented: true` on
-    // its `drop` entry — that's the signal its own listener (or an
-    // ancestor's) handled the synthetic event.
-    debugPrint('[file-drop] injection diagnostics: $diagnostics');
+    debugPrint(
+      '[file-drop] native WebView2 drop: $accepted '
+      'at ${point.dx.toStringAsFixed(1)},${point.dy.toStringAsFixed(1)}',
+    );
   }
 }
 
@@ -374,7 +380,6 @@ class _MobileEngineSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (handle is SlotEmbedWebViewSessionHandle) {
-     
       return SlotEmbedWebView(
         key: ValueKey('slot_embed_${handle.accountId}'),
         handle: handle as SlotEmbedWebViewSessionHandle,
@@ -385,7 +390,6 @@ class _MobileEngineSurface extends StatelessWidget {
     );
   }
 }
-
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState();

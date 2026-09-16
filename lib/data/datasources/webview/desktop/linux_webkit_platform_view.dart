@@ -45,11 +45,11 @@ class LinuxWebKitPlatformView {
     return _channel.invokeMethod('reload', {'viewId': viewId});
   }
 
-  static Future<void> runJavaScript({
+  static Future<dynamic> runJavaScript({
     required String viewId,
     required String script,
   }) {
-    return _channel.invokeMethod('runJavaScript', {
+    return _channel.invokeMethod<dynamic>('runJavaScript', {
       'viewId': viewId,
       'script': script,
     });
