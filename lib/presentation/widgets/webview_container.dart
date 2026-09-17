@@ -194,51 +194,67 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
       (p) => p.mimeType.startsWith('image/') || p.mimeType.startsWith('video/'),
     );
 
+    // PENTING: dulu blok attach-menu ini di-skip untuk kasus "allImages",
+    // sehingga targetInputIndex tetap null dan finish-script jatuh ke
+    // strategi "broadcast-all" (menyetel file ke SEMUA input[type=file] di
+    // halaman) — inilah yang membuat gambar yang di-drop malah terkirim
+    // sebagai stiker (ada input tersembunyi milik sticker maker yang ikut
+    // menerima file). Sekarang gambar/video JUGA selalu diarahkan lewat
+    // attach menu ("Photos & videos"), sama seperti dokumen, supaya kita
+    // selalu tahu & menandai input yang tepat.
+    final isDocumentFlow = !allImages;
+
     int? targetInputIndex;
 
-    if (!allImages) {
-      final openResult = await widget.handle.controller.executeScript(
-        buildOpenAttachMenuScript(),
+    final openResult = await widget.handle.controller.executeScript(
+      buildOpenAttachMenuScript(),
+    );
+    debugPrint('[file-drop] open-attach-menu: $openResult');
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    final clickResult = await widget.handle.controller.executeScript(
+      isDocumentFlow
+          ? buildClickDocumentMenuItemScript()
+          : buildClickPhotosMenuItemScript(),
+    );
+    debugPrint('[file-drop] click-menu-item: $clickResult');
+
+    final clickOk = (clickResult is Map && clickResult['ok'] == true);
+    if (!clickOk) {
+      debugPrint(
+        '[file-drop] ABORT: gagal klik item menu '
+        '(${isDocumentFlow ? 'Document' : 'Photos & videos'})',
       );
-      debugPrint('[file-drop] open-attach-menu: $openResult');
-      await Future.delayed(const Duration(milliseconds: 200));
-
-      final clickResult = await widget.handle.controller.executeScript(
-        buildClickDocumentMenuItemScript(),
-      );
-      debugPrint('[file-drop] click-document-item: $clickResult');
-
-      final clickOk = (clickResult is Map && clickResult['ok'] == true);
-      if (!clickOk) {
-        debugPrint('[file-drop] ABORT: gagal klik item Document');
-        return;
-      }
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      int? found;
-      for (var attempt = 0; attempt < 10; attempt++) {
-        final findResult = await widget.handle.controller.executeScript(
-          buildFindDocumentInputScript(),
-        );
-        debugPrint('[file-drop] find-doc-input attempt $attempt: $findResult');
-        if (findResult is Map) {
-          final docIndex = findResult['docIndex'];
-          if (docIndex is int && docIndex != -1) {
-            found = docIndex;
-            break;
-          }
-        }
-        await Future.delayed(const Duration(milliseconds: 150));
-      }
-
-      if (found == null) {
-        debugPrint(
-          '[file-drop] ABORT: input accept="*" tidak ditemukan setelah klik Document',
-        );
-        return;
-      }
-      targetInputIndex = found;
+      return;
     }
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    int? found;
+    for (var attempt = 0; attempt < 10; attempt++) {
+      final findResult = await widget.handle.controller.executeScript(
+        isDocumentFlow
+            ? buildFindDocumentInputScript()
+            : buildFindMediaInputScript(),
+      );
+      debugPrint('[file-drop] find-input attempt $attempt: $findResult');
+      if (findResult is Map) {
+        final idx = findResult['docIndex'];
+        if (idx is int && idx != -1) {
+          found = idx;
+          break;
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
+    if (found == null) {
+      debugPrint(
+        '[file-drop] ABORT: input target tidak ditemukan setelah klik menu '
+        '(${isDocumentFlow ? 'Document' : 'Photos & videos'})',
+      );
+      return;
+    }
+    targetInputIndex = found;
 
     final initResult = await widget.handle.controller.executeScript(
       buildChunkedTransferInitScript(payloads),
@@ -486,54 +502,67 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
           payload.mimeType.startsWith('video/'),
     );
 
+    // Lihat komentar senada di _WindowsEngineSurfaceState._handleDrop:
+    // gambar/video JUGA harus diarahkan lewat attach menu ("Photos &
+    // videos"), bukan di-skip, supaya targetInputIndex selalu terisi dan
+    // finish-script tidak jatuh ke strategi "broadcast-all" (yang bisa
+    // mengenai input tersembunyi milik sticker maker WhatsApp Web).
+    final isDocumentFlow = !allImages;
+
     int? targetInputIndex;
 
-    if (!allImages) {
-      final openResult = await LinuxWebKitPlatformView.runJavaScript(
-        viewId: viewId,
-        script: buildOpenAttachMenuScript(),
+    final openResult = await LinuxWebKitPlatformView.runJavaScript(
+      viewId: viewId,
+      script: buildOpenAttachMenuScript(),
+    );
+    debugPrint('[file-drop][linux] open-attach-menu: $openResult');
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    final clickResult = await LinuxWebKitPlatformView.runJavaScript(
+      viewId: viewId,
+      script: isDocumentFlow
+          ? buildClickDocumentMenuItemScript()
+          : buildClickPhotosMenuItemScript(),
+    );
+    debugPrint('[file-drop][linux] click-menu-item: $clickResult');
+
+    final clickOk = (clickResult is Map && clickResult['ok'] == true);
+    if (!clickOk) {
+      debugPrint(
+        '[file-drop][linux] ABORT: gagal klik item menu '
+        '(${isDocumentFlow ? 'Document' : 'Photos & videos'})',
       );
-      debugPrint('[file-drop][linux] open-attach-menu: $openResult');
-      await Future.delayed(const Duration(milliseconds: 200));
-
-      final clickResult = await LinuxWebKitPlatformView.runJavaScript(
-        viewId: viewId,
-        script: buildClickDocumentMenuItemScript(),
-      );
-      debugPrint('[file-drop][linux] click-document-item: $clickResult');
-
-      final clickOk = (clickResult is Map && clickResult['ok'] == true);
-      if (!clickOk) {
-        debugPrint('[file-drop][linux] ABORT: gagal klik item Document');
-        return;
-      }
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      int? found;
-      for (var attempt = 0; attempt < 10; attempt++) {
-        final findResult = await LinuxWebKitPlatformView.runJavaScript(
-          viewId: viewId,
-          script: buildFindDocumentInputScript(),
-        );
-        debugPrint('[file-drop][linux] find-doc-input attempt $attempt: $findResult');
-        if (findResult is Map) {
-          final docIndex = findResult['docIndex'];
-          if (docIndex is int && docIndex != -1) {
-            found = docIndex;
-            break;
-          }
-        }
-        await Future.delayed(const Duration(milliseconds: 150));
-      }
-
-      if (found == null) {
-        debugPrint(
-          '[file-drop][linux] ABORT: input accept="*" tidak ditemukan setelah klik Document',
-        );
-        return;
-      }
-      targetInputIndex = found;
+      return;
     }
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    int? found;
+    for (var attempt = 0; attempt < 10; attempt++) {
+      final findResult = await LinuxWebKitPlatformView.runJavaScript(
+        viewId: viewId,
+        script: isDocumentFlow
+            ? buildFindDocumentInputScript()
+            : buildFindMediaInputScript(),
+      );
+      debugPrint('[file-drop][linux] find-input attempt $attempt: $findResult');
+      if (findResult is Map) {
+        final idx = findResult['docIndex'];
+        if (idx is int && idx != -1) {
+          found = idx;
+          break;
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
+    if (found == null) {
+      debugPrint(
+        '[file-drop][linux] ABORT: input target tidak ditemukan setelah klik menu '
+        '(${isDocumentFlow ? 'Document' : 'Photos & videos'})',
+      );
+      return;
+    }
+    targetInputIndex = found;
 
     final initResult = await LinuxWebKitPlatformView.runJavaScript(
       viewId: viewId,

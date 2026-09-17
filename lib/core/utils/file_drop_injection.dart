@@ -124,10 +124,10 @@ String buildScanForAttachMenuScript() {
   icons.forEach(function(el, idx) {
     var di = el.getAttribute('data-icon') || '';
     if (di.indexOf(EXCLUDE_PREFIX) === 0 && di.indexOf(EXCLUDE_SUFFIX) === di.length - EXCLUDE_SUFFIX.length) {
-      return; 
+      return;
     }
     if (di === 'tail-out' || di === 'wa-wordmark' || di === 'ic-attach-file' || di === 'unknown') {
-      return; 
+      return;
     }
     var clickable = el.closest('li, div[role="button"], button');
     if (!clickable) return;
@@ -147,21 +147,27 @@ String buildScanForAttachMenuScript() {
 ''';
 }
 
-/// Mengklik item menu "Document". PENTING: klik pada item ini akan memicu
-/// handler internal React WhatsApp yang memanggil `.click()` pada
-/// `<input type="file" accept="*">` tersembunyi — dan memanggil `.click()`
-/// pada input file SELALU membuka dialog "Open File" bawaan OS, apa pun
-/// sumber klik-nya (asli atau sintetis).
+/// Generik: klik item menu attach berdasarkan salah satu label yang cocok
+/// (case-insensitive, exact atau substring — supaya tahan terhadap variasi
+/// bahasa/versi WhatsApp Web, misal "Document"/"Dokumen" atau
+/// "Photos & videos"/"Foto & video").
+///
+/// PENTING: klik pada item ini akan memicu handler internal React WhatsApp
+/// yang memanggil `.click()` pada `<input type="file">` tersembunyi terkait
+/// — dan memanggil `.click()` pada input file SELALU membuka dialog
+/// "Open File" bawaan OS, apa pun sumber klik-nya (asli atau sintetis).
 ///
 /// Kita tetap butuh efek "klik menu" ini (supaya state React ter-update dan
-/// input accept="*" ter-mount di DOM — tanpa ini `buildFindDocumentInputScript`
-/// tidak akan pernah menemukan inputnya), tapi TIDAK butuh efek sampingnya
-/// (dialog native terbuka, karena file sudah kita suntikkan sendiri lewat
+/// input file yang relevan ter-mount di DOM — tanpa ini
+/// `buildFindDocumentInputScript`/`buildFindMediaInputScript` tidak akan
+/// pernah menemukan inputnya), tapi TIDAK butuh efek sampingnya (dialog
+/// native terbuka, karena file sudah kita suntikkan sendiri lewat
 /// DataTransfer). Solusinya: nonaktifkan sementara
 /// `HTMLInputElement.prototype.click` khusus untuk `type="file"` selama
 /// event klik ini diproses, lalu kembalikan seperti semula.
-String buildClickDocumentMenuItemScript() {
-  return r'''
+String buildClickMenuItemScript(List<String> labels) {
+  final labelsJson = jsonEncode(labels);
+  return '''
 (function() {
   var diag = {
     ok: false,
@@ -171,6 +177,7 @@ String buildClickDocumentMenuItemScript() {
     patchedClick: false
   };
   var originalClick = null;
+  var labels = $labelsJson;
   try {
     originalClick = HTMLInputElement.prototype.click;
     HTMLInputElement.prototype.click = function () {
@@ -193,15 +200,29 @@ String buildClickDocumentMenuItemScript() {
     diag.candidateCount = items.length;
     var target = null;
 
+    function matches(txt) {
+      var t = txt.toLowerCase();
+      for (var i = 0; i < labels.length; i++) {
+        var l = labels[i].toLowerCase();
+        if (t === l || t.indexOf(l) !== -1) return true;
+      }
+      return false;
+    }
+
     for (var i = 0; i < items.length; i++) {
       var txt = (items[i].innerText || '').trim();
-      if (txt === 'Document' || txt === 'Dokumen') {
+      if (txt && matches(txt)) {
         target = items[i];
         break;
       }
     }
 
-    if (!target) throw new Error('Document menuitem not found among ' + diag.candidateCount + ' candidates');
+    if (!target) {
+      throw new Error(
+        'menuitem not found among ' + diag.candidateCount +
+        ' candidates for labels ' + labels.join(',')
+      );
+    }
     diag.found = true;
 
     var rect = target.getBoundingClientRect();
@@ -233,6 +254,27 @@ String buildClickDocumentMenuItemScript() {
 })();
 ''';
 }
+
+/// Klik item menu "Document" / "Dokumen" di attach menu.
+String buildClickDocumentMenuItemScript() =>
+    buildClickMenuItemScript(const ['Document', 'Dokumen']);
+
+/// Klik item menu "Photos & videos" / "Foto & video" di attach menu.
+///
+/// WAJIB dipakai untuk drop gambar/video — JANGAN skip langkah attach-menu
+/// untuk kasus ini. Kalau dilewati, `targetInputIndex` akan tetap `null`
+/// dan `buildChunkedTransferFinishScript` akan jatuh ke strategi terakhir
+/// (`broadcast-all`): menyetel file ke SEMUA `input[type="file"]` di
+/// halaman, termasuk kemungkinan input tersembunyi milik fitur sticker
+/// maker WhatsApp Web yang juga menerima gambar — inilah penyebab gambar
+/// yang di-drop malah terkirim sebagai stiker.
+String buildClickPhotosMenuItemScript() => buildClickMenuItemScript(const [
+      'Photos & videos',
+      'Photos and videos',
+      'Photo & video',
+      'Foto & video',
+      'Foto dan video',
+    ]);
 
 String buildDumpMenuCandidatesScript() {
   return r'''
@@ -273,7 +315,6 @@ String buildStartMutationWatchScript() {
 })();
 ''';
 }
-
 
 String buildReadMutationWatchScript() {
   return r'''
@@ -355,6 +396,82 @@ String buildFindDocumentInputScript() {
 ''';
 }
 
+/// Sama seperti [buildFindDocumentInputScript], tapi untuk slot media
+/// (gambar/video) yang dibuka lewat item menu "Photos & videos". Input ini
+/// biasanya punya `accept` berisi "image" dan/atau "video" (BUKAN `accept="*"`
+/// seperti slot Document), jadi dicari secara terpisah supaya tidak pernah
+/// tertukar dan supaya [buildChunkedTransferFinishScript] selalu bisa
+/// memakai strategi "tagged" (bukan jatuh ke "broadcast-all").
+///
+/// PENTING — ada JEBAKAN di sini: WhatsApp Web memasang DUA input file yang
+/// sama-sama menerima gambar, misalnya:
+///   idx 0: accept="image/*"                                    multiple=false  <- input STICKER MAKER
+///   idx 1: accept="image/*,video/mp4,video/webm,..."            multiple=true   <- input Photos & videos (yang kita mau)
+/// Kalau kita asal ambil kandidat pertama yang accept-nya mengandung
+/// "image"/"video", yang kepilih bisa jadi input sticker (idx 0) —
+/// menyebabkan gambar yang di-drop dikirim sebagai STIKER, bukan foto biasa.
+/// Jadi di sini kandidat diberi skor dan yang skornya TERTINGGI yang
+/// ditandai:
+///   - accept mengandung "video"  → +2  (sticker maker cuma terima image)
+///   - multiple === true          → +1  (picker Photos & videos multi-select,
+///                                        sticker maker single-select)
+/// Kalau ada beberapa dengan skor sama, dipilih yang paling awal muncul.
+String buildFindMediaInputScript() {
+  return r'''
+(function() {
+  // Bersihkan tag lama kalau ada sisa dari percobaan sebelumnya yang gagal.
+  document.querySelectorAll('input[type="file"][data-mww-doc-target]').forEach(function(el) {
+    el.removeAttribute('data-mww-doc-target');
+  });
+
+  var inputs = document.querySelectorAll('input[type="file"]');
+  var out = [];
+  var bestScore = -1;
+  var mediaIndex = -1;
+  var mediaInput = null;
+
+  inputs.forEach(function(inp, idx) {
+    var accept = inp.getAttribute('accept') || '';
+    out.push({
+      idx: idx,
+      accept: accept,
+      multiple: inp.multiple,
+      hidden: inp.hidden || inp.style.display === 'none'
+    });
+
+    var isImageOrVideo = accept !== '*' &&
+        (accept.indexOf('image') !== -1 || accept.indexOf('video') !== -1);
+    if (!isImageOrVideo) return;
+
+    var score = 0;
+    if (accept.indexOf('video') !== -1) score += 2;
+    if (inp.multiple === true) score += 1;
+
+    if (score > bestScore) {
+      bestScore = score;
+      mediaIndex = idx;
+      mediaInput = inp;
+    }
+  });
+
+  if (mediaInput) {
+    mediaInput.setAttribute('data-mww-doc-target', '1');
+  }
+
+  // Nama field tetap "docIndex"/"tagged" (bukan "mediaIndex") supaya kode
+  // Dart yang membaca hasil find-script (untuk Document maupun Media) tidak
+  // perlu bercabang berdasarkan nama field.
+  return {
+    count: inputs.length,
+    inputs: out,
+    docIndex: mediaIndex,
+    tagged: !!mediaInput,
+    score: bestScore
+  };
+})();
+''';
+}
+
 String buildChunkedTransferFinishScript({int? targetInputIndex}) {
   final targetLiteral = targetInputIndex?.toString() ?? 'null';
   return '''
@@ -392,8 +509,11 @@ String buildChunkedTransferFinishScript({int? targetInputIndex}) {
     var inputs = null;
 
     // Strategi 1: elemen persis yang sudah ditandai oleh
-    // buildFindDocumentInputScript — kebal terhadap reorder DOM karena kita
-    // mencari elemen itu sendiri, bukan posisinya di NodeList.
+    // buildFindDocumentInputScript / buildFindMediaInputScript — kebal
+    // terhadap reorder DOM karena kita mencari elemen itu sendiri, bukan
+    // posisinya di NodeList. Ini strategi yang SEHARUSNYA selalu dipakai,
+    // baik untuk dokumen maupun media, karena Dart-side sekarang selalu
+    // melewati langkah attach-menu + tagging sebelum sampai ke sini.
     var tagged = document.querySelector('input[type="file"][data-mww-doc-target]');
     if (tagged) {
       inputs = [tagged];
@@ -420,9 +540,12 @@ String buildChunkedTransferFinishScript({int? targetInputIndex}) {
       diag.targetStrategy = 'stale-index';
     }
 
-    // Strategi 4: tidak ada target spesifik sama sekali (kasus drop
-    // gambar/video biasa, targetInputIndex memang null dari awal) —
-    // broadcast ke semua input file yang ada.
+    // Strategi 4 (broadcast-all): HANYA dipakai kalau memang tidak ada
+    // target spesifik sama sekali dari awal (targetInputIndex null DAN
+    // tidak ada elemen ter-tag). Sejak Dart-side selalu mengarahkan
+    // gambar/video lewat menu "Photos & videos" (bukan lagi di-skip),
+    // strategi ini seharusnya tidak lagi terpakai dalam alur normal — kalau
+    // masih terpakai, itu tanda ada regresi di kode Dart pemanggilnya.
     if (!inputs) {
       inputs = Array.prototype.slice.call(allInputs);
       diag.targetStrategy = 'broadcast-all';
