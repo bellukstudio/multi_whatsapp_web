@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:desktop_drop/desktop_drop.dart';
@@ -10,6 +11,7 @@ import 'package:webview_windows/webview_windows.dart' as win;
 
 import '../../app.dart' show desktopWebViewRouteObserver;
 import '../../core/utils/app_restarter.dart';
+import '../../core/utils/file_drop_injection.dart';
 import '../../data/datasources/webview/desktop/linux_webview_adapter.dart';
 import '../../data/datasources/webview/desktop/linux_webkit_platform_view.dart';
 import '../../data/datasources/webview/desktop/windows_webview_adapter.dart';
@@ -101,7 +103,6 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     with RouteAware {
   bool _mounted = true;
   bool _dragging = false;
-  Timer? _dragExitTimer;
   ModalRoute<void>? _subscribedRoute;
 
   @override
@@ -138,7 +139,6 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
 
   @override
   void dispose() {
-    _dragExitTimer?.cancel();
     if (_subscribedRoute != null) {
       desktopWebViewRouteObserver.unsubscribe(this);
     }
@@ -152,12 +152,8 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     }
 
     return DropTarget(
-      // A Windows platform view can briefly make desktop_drop report a drag
-      // exit while the cursor is still over this surface. Do not immediately
-      // clear the state: that transient exit made the drag/attachment preview
-      // flicker on and off.
-      onDragEntered: _handleDragEntered,
-      onDragExited: _handleDragExited,
+      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragExited: (_) => setState(() => _dragging = false),
       onDragDone: _handleDrop,
       child: Stack(
         fit: StackFit.expand,
@@ -170,10 +166,7 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
                 alignment: Alignment.center,
                 child: const Card(
                   child: Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
-                    ),
+                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                     child: Text('Lepas untuk mengirim file'),
                   ),
                 ),
@@ -184,51 +177,101 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
     );
   }
 
-  void _handleDragEntered(DropEventDetails _) {
-    _dragExitTimer?.cancel();
-    if (!_dragging && mounted) {
-      setState(() => _dragging = true);
-    }
-  }
-
-  void _handleDragExited(DropEventDetails _) {
-    _dragExitTimer?.cancel();
-    // Keep the indicator during a transient platform-view boundary crossing.
-    // A real exit remains hidden after this short grace period.
-    _dragExitTimer = Timer(const Duration(milliseconds: 180), () {
-      if (mounted && _dragging) {
-        setState(() => _dragging = false);
-      }
-    });
-  }
-
-  // Sends the drop through WebView2's native drag-and-drop pipeline. Unlike
-  // DOM events or a file-picker automation, WhatsApp receives a trusted
-  // CF_HDROP payload at the point where the user released the files.
   Future<void> _handleDrop(DropDoneDetails detail) async {
     if (detail.files.isEmpty) return;
-    _dragExitTimer?.cancel();
-    if (_dragging && mounted) {
-      setState(() => _dragging = false);
+    setState(() => _dragging = false);
+
+    final payloads = <DroppedFilePayload>[];
+    for (final file in detail.files) {
+      final bytes = await file.readAsBytes();
+      payloads.add(
+        DroppedFilePayload(
+          name: file.name,
+          mimeType: file.mimeType ?? guessMimeType(file.name),
+          bytesBase64: base64Encode(bytes),
+        ),
+      );
     }
     if (!mounted) return;
 
-    final renderObject = context.findRenderObject();
-    if (renderObject is! RenderBox || !renderObject.attached) {
-      debugPrint('[file-drop] webview bounds are unavailable.');
-      return;
+    final allImages = payloads.every(
+      (p) => p.mimeType.startsWith('image/') || p.mimeType.startsWith('video/'),
+    );
+
+    int? targetInputIndex;
+
+    if (!allImages) {
+      final openResult = await widget.handle.controller.executeScript(
+        buildOpenAttachMenuScript(),
+      );
+      debugPrint('[file-drop] open-attach-menu: $openResult');
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      final clickResult = await widget.handle.controller.executeScript(
+        buildClickDocumentMenuItemScript(),
+      );
+      debugPrint('[file-drop] click-document-item: $clickResult');
+
+      final clickOk = (clickResult is Map && clickResult['ok'] == true);
+      if (!clickOk) {
+        debugPrint('[file-drop] ABORT: gagal klik item Document');
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      int? found;
+      for (var attempt = 0; attempt < 10; attempt++) {
+        final findResult = await widget.handle.controller.executeScript(
+          buildFindDocumentInputScript(),
+        );
+        debugPrint('[file-drop] find-doc-input attempt $attempt: $findResult');
+        if (findResult is Map) {
+          final docIndex = findResult['docIndex'];
+          if (docIndex is int && docIndex != -1) {
+            found = docIndex;
+            break;
+          }
+        }
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
+
+      if (found == null) {
+        debugPrint(
+          '[file-drop] ABORT: input accept="*" tidak ditemukan setelah klik Document',
+        );
+        return;
+      }
+      targetInputIndex = found;
     }
 
-    final point = renderObject.globalToLocal(detail.globalPosition);
-    final accepted = await widget.handle.controller.dropFile(
-      detail.files.map((file) => file.path).toList(growable: false),
-      point.dx,
-      point.dy,
+    final initResult = await widget.handle.controller.executeScript(
+      buildChunkedTransferInitScript(payloads),
     );
-    debugPrint(
-      '[file-drop] native WebView2 drop: $accepted '
-      'at ${point.dx.toStringAsFixed(1)},${point.dy.toStringAsFixed(1)}',
+    debugPrint('[file-drop] chunk-init: $initResult');
+
+    for (var i = 0; i < payloads.length; i++) {
+      final b64 = payloads[i].bytesBase64;
+      var offset = 0;
+      var chunkCount = 0;
+      while (offset < b64.length) {
+        final end = (offset + fileChunkBase64Size < b64.length)
+            ? offset + fileChunkBase64Size
+            : b64.length;
+        await widget.handle.controller.executeScript(
+          buildChunkedTransferAppendScript(i, b64.substring(offset, end)),
+        );
+        offset = end;
+        chunkCount++;
+      }
+      debugPrint(
+        '[file-drop] chunk-append: file $i (${payloads[i].name}) sent in $chunkCount chunk(s)',
+      );
+    }
+
+    final inputResult = await widget.handle.controller.executeScript(
+      buildChunkedTransferFinishScript(targetInputIndex: targetInputIndex),
     );
+    debugPrint('[file-drop] input-populate: $inputResult');
   }
 }
 

@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-/// One file to be "dropped" into the page via synthetic DOM events.
 class DroppedFilePayload {
   const DroppedFilePayload({
     required this.name,
@@ -13,340 +12,8 @@ class DroppedFilePayload {
   final String bytesBase64;
 }
 
-/// Builds a script that reconstructs each dropped file as a real
-/// in-page `File` object built directly from bytes we already read via
-/// Dart's filesystem access, wraps them in a `DataTransfer`, and
-/// dispatches synthetic dragenter/dragover/drop events carrying that
-/// DataTransfer on `document.body` so WhatsApp Web's own drop-zone
-/// listener picks it up as if the files had been dragged in from
-/// Windows Explorer.
-///
-/// Why this is needed at all: on Windows, `webview_windows` renders
-/// WebView2 off-screen via `ICoreWebView2CompositionController` and
-/// streams it into Flutter as a texture — the actual WebView2 HWND
-/// used internally is a message-only window (`HWND_MESSAGE`), which
-/// has no screen position and can never be a real OS drag-and-drop
-/// target. So a real file dragged from Explorer has nowhere valid to
-/// land natively. This sidesteps that entirely: `desktop_drop` catches
-/// the drop on Flutter's own (real) window, we read the bytes in Dart,
-/// and re-inject them into the page as a synthetic-but-fully-
-/// functional drop, without needing any native changes to the
-/// WebView2 plugin itself.
-///
-/// NOTE: dispatches on both `document.body` and `window` rather than a
-/// specific drop-zone element, since WhatsApp Web's own drop handling
-/// responds to a drop anywhere over the app (it shows a full-window
-/// "Drop here" overlay). `window` is included explicitly because
-/// WhatsApp Web has been observed (via DevTools `getEventListeners`)
-/// to attach its `dragover`/`drop` listeners directly to `window`
-/// rather than `document` or `document.body` — those two elements had
-/// no listeners at all. Dispatching on `document.body` alone should
-/// still bubble up to `window`, but firing on both is cheap insurance.
-/// If a future WhatsApp Web redesign narrows this to a more specific
-/// container, retarget accordingly — same pattern as the chat-blur
-/// selectors in chat_blur_css.dart.
-///
-/// [pointX]/[pointY], when provided, are the drop position in CSS
-/// pixels local to the webview surface (i.e. the same space
-/// `document.elementFromPoint` expects). This function only performs
-/// the "setup" step (build the `File`s/`DataTransfer`, locate the
-/// element under the cursor, and fire `dragenter`); call
-/// [buildFileDropAdvanceScript] and [buildFileDropFinishScript]
-/// afterward, with real delays between each `executeScript` call from
-/// Dart, to complete the sequence. This is deliberately split into
-/// multiple synchronous scripts, run from Dart with real delays in
-/// between, rather than one script using `await`/`setTimeout`
-/// internally: `executeScript` (per `webview_windows`/this WebView2
-/// version) does *not* await a returned Promise's resolution — it
-/// serializes the Promise object itself, which has no own enumerable
-/// properties and comes back as an empty `{}`. Splitting the sequence
-/// across calls sidesteps that entirely, and state is threaded
-/// between calls via a `window.__mwwDrop` stash (safe because
-/// `executeScript` calls all run in the same persistent page context,
-/// not a fresh one each time).
-///
-/// The reason to spread the events out at all: a real OS-driven drag
-/// naturally produces a *stream* of dragover events over time, and
-/// React-based drop handling commonly reads/writes state across that
-/// stream (e.g. show-overlay-on-enter, confirm-still-hovering-on-over)
-/// that a single synchronous burst of events may not exercise
-/// correctly.
-///
-/// The dispatch is targeted at the element under the cursor (rather
-/// than only on `document.body`/`window`) because dragenter/dragover/
-/// drop only bubble *upward* from the dispatch target: a page-specific
-/// drop-zone element nested inside the app (e.g. scoped to the open
-/// chat panel) can only ever be reached by starting the dispatch at
-/// or below it. `document.body`/`window` are still fired once, untimed,
-/// by [buildFileDropFinishScript] as a fallback/safety net — WhatsApp
-/// Web has been observed (via DevTools `getEventListeners`) to attach
-/// generic preventDefault-only `dragover`/`drop` listeners directly to
-/// `window` (likely just to stop the browser's default "open the file
-/// as a page" behavior), so those are kept for completeness even
-/// though they're not expected to trigger the actual attach flow.
-String buildFileDropSetupScript(
-  List<DroppedFilePayload> files, {
-  double? pointX,
-  double? pointY,
-}) {
-  final filesJson = jsonEncode(files
-      .map((f) => {
-            'name': f.name,
-            'type': f.mimeType,
-            'bytesBase64': f.bytesBase64,
-          })
-      .toList());
-
-  final pxLiteral = pointX?.toString() ?? 'null';
-  final pyLiteral = pointY?.toString() ?? 'null';
-
-  return '''
-(function() {
-  var diag = {
-    ok: false, error: null, fileCount: 0, types: [],
-    pointTargetTag: null
-  };
-  try {
-    var payload = $filesJson;
-    diag.fileCount = payload.length;
-    var fileObjects = payload.map(function(f) {
-      var binary = atob(f.bytesBase64);
-      var bytes = new Uint8Array(binary.length);
-      for (var i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return new File([bytes], f.name, { type: f.type });
-    });
-
-    var dataTransfer = new DataTransfer();
-    fileObjects.forEach(function(f) { dataTransfer.items.add(f); });
-    dataTransfer.effectAllowed = 'copyMove';
-    diag.types = Array.prototype.slice.call(dataTransfer.types);
-
-    var px = $pxLiteral;
-    var py = $pyLiteral;
-    var pointTarget = (px !== null && py !== null)
-      ? document.elementFromPoint(px, py)
-      : null;
-    if (pointTarget) {
-      var cls = pointTarget.className
-        ? '.' + String(pointTarget.className).trim().split(/\\s+/).join('.')
-        : '';
-      diag.pointTargetTag = pointTarget.tagName + cls;
-    }
-
-    function label(node) {
-      if (node === window) return 'window';
-      if (node === document.body) return 'document.body';
-      return 'pointTarget';
-    }
-
-    function fire(type, node) {
-      var opts = { bubbles: true, cancelable: true, dataTransfer: dataTransfer };
-      if (px !== null && py !== null) {
-        opts.clientX = px;
-        opts.clientY = py;
-        opts.screenX = px;
-        opts.screenY = py;
-      }
-      var event = new DragEvent(type, opts);
-      var notCanceled = node.dispatchEvent(event);
-      window.__mwwDrop.results.push({
-        type: type,
-        target: label(node),
-        defaultPrevented: event.defaultPrevented,
-        dispatchReturnedTrue: notCanceled
-      });
-    }
-
-    window.__mwwDrop = {
-      dataTransfer: dataTransfer,
-      pointTarget: pointTarget,
-      pointTargetTag: diag.pointTargetTag,
-      types: diag.types,
-      fileCount: diag.fileCount,
-      results: [],
-      fire: fire
-    };
-
-    if (pointTarget) fire('dragenter', pointTarget);
-    diag.ok = true;
-  } catch (e) {
-    diag.error = String(e && e.stack ? e.stack : e);
-  }
-  return diag;
-})();
-''';
-}
-
-/// Fires one more `dragover` on the cached point target (see
-/// [buildFileDropSetupScript]). Call this once or twice, with a real
-/// Dart-side delay before each call, to simulate the natural stream
-/// of dragover events a real drag produces before [buildFileDropFinishScript].
-String buildFileDropAdvanceScript() {
-  return '''
-(function() {
-  try {
-    var st = window.__mwwDrop;
-    if (st && st.pointTarget) {
-      st.dataTransfer.dropEffect = 'copy';
-      st.fire('dragover', st.pointTarget);
-    }
-    return { ok: !!st };
-  } catch (e) {
-    return { ok: false, error: String(e && e.stack ? e.stack : e) };
-  }
-})();
-''';
-}
-
-/// Fires `drop` on the cached point target, then fires the untimed
-/// `document.body`/`window` fallback sequence, and returns the full
-/// diagnostics object accumulated across every call in the sequence
-/// (auto-serialized to JSON by `executeScript`, since this script is
-/// synchronous — see [buildFileDropSetupScript] for why that matters).
-/// Cleans up the `window.__mwwDrop` stash afterward.
-String buildFileDropFinishScript() {
-  return '''
-(function() {
-  var diag = { ok: false, error: null, results: [], pointTargetTag: null };
-  try {
-    var st = window.__mwwDrop;
-    if (st) {
-      if (st.pointTarget) st.fire('drop', st.pointTarget);
-      ['dragenter', 'dragover', 'drop'].forEach(function(type) {
-        st.fire(type, document.body);
-        st.fire(type, window);
-      });
-      diag.results = st.results;
-      diag.pointTargetTag = st.pointTargetTag;
-      diag.fileCount = st.fileCount;
-      diag.types = st.types;
-    }
-    diag.ok = true;
-    delete window.__mwwDrop;
-  } catch (e) {
-    diag.error = String(e && e.stack ? e.stack : e);
-  } finally {
-    delete window.__mwwDrop;
-  }
-  return diag;
-})();
-''';
-}
-
-/// Alternative to the drag/drop simulation above: populates a real
-/// `<input type="file">` element already present in the page directly
-/// with the dropped files (via `input.files = dataTransfer.files`)
-/// and fires `input`/`change` on it, instead of simulating drag
-/// events. Modeled on a working fix from a Selenium-based WhatsApp
-/// automation script the user had previously built: that script
-/// selects the file through WhatsApp's real "Attach → Document" OS
-/// file dialog (so it's a fully native, trusted file selection — not
-/// a synthetic event at all), and the fix for the exact "preview
-/// flashes then disappears" symptom seen here was to strip the
-/// `accept` attribute off every `input[type="file"]` on the page
-/// (`removeAttribute('accept')`), presumably because WhatsApp Web (or
-/// the browser) was silently rejecting the file against an `accept`
-/// whitelist. This mirrors that fix for our drag-free path: strip
-/// `accept`, then assign the files directly.
-///
-/// We can't reproduce the "click Attach → Document" step that script
-/// uses to open that dialog — `input.click()` on a real `<input
-/// type="file">` opens the native OS Open-File dialog, which blocks
-/// the WebView2 renderer thread until dismissed, hanging our
-/// synchronous script. So instead this assumes WhatsApp Web keeps its
-/// file input(s) mounted in the DOM (just hidden) once a chat is
-/// open, and populates them without ever opening that dialog — the
-/// same technique browser automation tools (e.g. Playwright's
-/// `setInputFiles`) use. If `inputCount` in the returned diagnostics
-/// is 0, that assumption is wrong and the input only gets mounted
-/// after actually opening the attach menu, which would need a
-/// different approach.
-String buildFileInputPopulateScript(List<DroppedFilePayload> files) {
-  final filesJson = jsonEncode(files
-      .map((f) => {
-            'name': f.name,
-            'type': f.mimeType,
-            'bytesBase64': f.bytesBase64,
-          })
-      .toList());
-
-  return '''
-(function() {
-  var diag = { ok: false, error: null, inputCount: 0, results: [] };
-  try {
-    var payload = $filesJson;
-    var fileObjects = payload.map(function(f) {
-      var binary = atob(f.bytesBase64);
-      var bytes = new Uint8Array(binary.length);
-      for (var i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return new File([bytes], f.name, { type: f.type });
-    });
-
-    var dataTransfer = new DataTransfer();
-    fileObjects.forEach(function(f) { dataTransfer.items.add(f); });
-
-    var inputs = document.querySelectorAll('input[type="file"]');
-    diag.inputCount = inputs.length;
-    inputs.forEach(function(input, idx) {
-      var beforeAccept = input.getAttribute('accept');
-      try {
-        input.removeAttribute('accept');
-        input.files = dataTransfer.files;
-        var setCount = input.files ? input.files.length : -1;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        diag.results.push({
-          index: idx,
-          beforeAccept: beforeAccept,
-          filesSetCount: setCount,
-          ok: true
-        });
-      } catch (e) {
-        diag.results.push({
-          index: idx,
-          beforeAccept: beforeAccept,
-          ok: false,
-          error: String(e && e.stack ? e.stack : e)
-        });
-      }
-    });
-    diag.ok = true;
-  } catch (e) {
-    diag.error = String(e && e.stack ? e.stack : e);
-  }
-  return diag;
-})();
-''';
-}
-
-/// Number of base64 characters sent per chunk by the
-/// `buildChunkedTransfer*` functions (~375 KB of decoded file data
-/// per chunk). Kept moderate so a large file (e.g. a big .apk) still
-/// completes in a reasonable number of round trips without any single
-/// `executeScript` call carrying enough data to risk hitting a
-/// message-size limit.
 const int fileChunkBase64Size = 500000;
 
-/// First step of the chunked variant of [buildFileInputPopulateScript],
-/// needed for large files: embedding a big file's *entire* base64
-/// content directly into one `executeScript` call (as the
-/// non-chunked functions above do) can silently fail or hang for
-/// large files — the script string has to cross the Flutter↔native↔
-/// WebView2 boundary in one piece, and that has practical size
-/// limits well below what e.g. a large .apk needs. This splits the
-/// transfer across many small `executeScript` calls instead: call
-/// this once to declare which files are coming, then
-/// [buildChunkedTransferAppendScript] repeatedly (once per chunk, for
-/// each file) to stream in their base64 content piece by piece, then
-/// [buildChunkedTransferFinishScript] once to assemble everything and
-/// populate the page's `<input type="file">` (same mechanism as
-/// [buildFileInputPopulateScript]). State is threaded between calls
-/// via a `window.__mwwChunkBuffer` stash, safe because all these
-/// `executeScript` calls run in the same persistent page context.
 String buildChunkedTransferInitScript(List<DroppedFilePayload> files) {
   final metaJson = jsonEncode(
     files.map((f) => {'name': f.name, 'type': f.mimeType}).toList(),
@@ -364,10 +31,26 @@ String buildChunkedTransferInitScript(List<DroppedFilePayload> files) {
 ''';
 }
 
-/// Appends one chunk of base64 data to file [fileIndex] (its position
-/// in the list passed to [buildChunkedTransferInitScript]). Call this
-/// repeatedly, in order, for each ~[fileChunkBase64Size]-character
-/// slice of that file's base64 content.
+String buildInspectAttachMenuIconsScript() {
+  return r'''
+(function() {
+  var icons = document.querySelectorAll('span[data-icon]');
+  var out = [];
+  icons.forEach(function(el, idx) {
+    var clickable = el.closest('li, div[role="button"], button');
+    out.push({
+      idx: idx,
+      dataIcon: el.getAttribute('data-icon'),
+      hasClickableAncestor: !!clickable,
+      ancestorTag: clickable ? clickable.tagName : null,
+      ancestorText: clickable ? (clickable.textContent || '').trim().slice(0, 40) : null
+    });
+  });
+  return { count: out.length, icons: out };
+})();
+''';
+}
+
 String buildChunkedTransferAppendScript(int fileIndex, String chunkBase64) {
   final chunkJson = jsonEncode(chunkBase64);
   return '''
@@ -382,14 +65,308 @@ String buildChunkedTransferAppendScript(int fileIndex, String chunkBase64) {
 ''';
 }
 
-/// Assembles every file's chunks back into `File` objects, then
-/// populates the page's `<input type="file">` element(s) with them —
-/// identical logic to [buildFileInputPopulateScript]'s second half.
-/// Cleans up `window.__mwwChunkBuffer` afterward either way.
-String buildChunkedTransferFinishScript() {
+String buildOpenAttachMenuScript() {
+  return r'''
+(function() {
+  var diag = { ok: false, error: null, clickedAttach: false, rect: null };
+  try {
+    var attachBtn =
+      document.querySelector('button[aria-label="Add file"]') ||
+      document.querySelector('span[data-icon="ic-attach-file"]') ||
+      document.querySelector('span[data-icon="attach-menu-plus"]') ||
+      document.querySelector('span[data-icon="clip"]') ||
+      document.querySelector('button[title="Attach"]') ||
+      document.querySelector('button[aria-label*="Attach"]');
+    if (!attachBtn) throw new Error('attach button not found');
+
+    var target = attachBtn.closest('button') || attachBtn;
+    var rect = target.getBoundingClientRect();
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    diag.rect = { x: cx, y: cy, w: rect.width, h: rect.height };
+
+    function fire(type, Ctor) {
+      var opts = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: cx,
+        clientY: cy,
+        button: 0,
+        buttons: 1
+      };
+      target.dispatchEvent(new Ctor(type, opts));
+    }
+
+    fire('pointerdown', PointerEvent);
+    fire('mousedown', MouseEvent);
+    fire('pointerup', PointerEvent);
+    fire('mouseup', MouseEvent);
+    fire('click', MouseEvent);
+
+    diag.clickedAttach = true;
+    diag.ok = true;
+  } catch (e) {
+    diag.error = String(e && e.stack ? e.stack : e);
+  }
+  return diag;
+})();
+''';
+}
+
+String buildScanForAttachMenuScript() {
+  return r'''
+(function() {
+  var EXCLUDE_PREFIX = 'document-';
+  var EXCLUDE_SUFFIX = '-icon';
+  var icons = document.querySelectorAll('span[data-icon]');
+  var candidates = [];
+  icons.forEach(function(el, idx) {
+    var di = el.getAttribute('data-icon') || '';
+    if (di.indexOf(EXCLUDE_PREFIX) === 0 && di.indexOf(EXCLUDE_SUFFIX) === di.length - EXCLUDE_SUFFIX.length) {
+      return; 
+    }
+    if (di === 'tail-out' || di === 'wa-wordmark' || di === 'ic-attach-file' || di === 'unknown') {
+      return; 
+    }
+    var clickable = el.closest('li, div[role="button"], button');
+    if (!clickable) return;
+    var rect = clickable.getBoundingClientRect();
+    candidates.push({
+      idx: idx,
+      dataIcon: di,
+      tag: clickable.tagName,
+      text: (clickable.textContent || '').trim().slice(0, 40),
+      testid: clickable.getAttribute('data-testid'),
+      rectW: Math.round(rect.width),
+      rectH: Math.round(rect.height)
+    });
+  });
+  return { totalIcons: icons.length, candidates: candidates };
+})();
+''';
+}
+
+/// Mengklik item menu "Document". PENTING: klik pada item ini akan memicu
+/// handler internal React WhatsApp yang memanggil `.click()` pada
+/// `<input type="file" accept="*">` tersembunyi — dan memanggil `.click()`
+/// pada input file SELALU membuka dialog "Open File" bawaan OS, apa pun
+/// sumber klik-nya (asli atau sintetis).
+///
+/// Kita tetap butuh efek "klik menu" ini (supaya state React ter-update dan
+/// input accept="*" ter-mount di DOM — tanpa ini `buildFindDocumentInputScript`
+/// tidak akan pernah menemukan inputnya), tapi TIDAK butuh efek sampingnya
+/// (dialog native terbuka, karena file sudah kita suntikkan sendiri lewat
+/// DataTransfer). Solusinya: nonaktifkan sementara
+/// `HTMLInputElement.prototype.click` khusus untuk `type="file"` selama
+/// event klik ini diproses, lalu kembalikan seperti semula.
+String buildClickDocumentMenuItemScript() {
+  return r'''
+(function() {
+  var diag = {
+    ok: false,
+    error: null,
+    found: false,
+    candidateCount: 0,
+    patchedClick: false
+  };
+  var originalClick = null;
+  try {
+    originalClick = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function () {
+      if (this.type === 'file') {
+        // No-op: cegah dialog "Open File" bawaan OS terbuka.
+        return;
+      }
+      return originalClick.apply(this, arguments);
+    };
+    diag.patchedClick = true;
+
+    // Jaga-jaga: kembalikan prototype asli setelah jeda singkat walau
+    // terjadi error di tengah jalan, supaya fitur attach manual milik user
+    // (klik tombol lampiran sendiri) tidak ikut ter-nonaktifkan permanen.
+    setTimeout(function () {
+      HTMLInputElement.prototype.click = originalClick;
+    }, 1500);
+
+    var items = document.querySelectorAll('button[role="menuitem"]');
+    diag.candidateCount = items.length;
+    var target = null;
+
+    for (var i = 0; i < items.length; i++) {
+      var txt = (items[i].innerText || '').trim();
+      if (txt === 'Document' || txt === 'Dokumen') {
+        target = items[i];
+        break;
+      }
+    }
+
+    if (!target) throw new Error('Document menuitem not found among ' + diag.candidateCount + ' candidates');
+    diag.found = true;
+
+    var rect = target.getBoundingClientRect();
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+
+    function fire(type, Ctor) {
+      var opts = {
+        bubbles: true, cancelable: true, view: window,
+        clientX: cx, clientY: cy, button: 0, buttons: 1
+      };
+      target.dispatchEvent(new Ctor(type, opts));
+    }
+    fire('pointerdown', PointerEvent);
+    fire('mousedown', MouseEvent);
+    fire('pointerup', PointerEvent);
+    fire('mouseup', MouseEvent);
+    fire('click', MouseEvent);
+
+    diag.ok = true;
+  } catch (e) {
+    diag.error = String(e && e.stack ? e.stack : e);
+    // Pastikan tetap dikembalikan segera kalau gagal sebelum setTimeout sempat jalan.
+    if (originalClick) {
+      HTMLInputElement.prototype.click = originalClick;
+    }
+  }
+  return diag;
+})();
+''';
+}
+
+String buildDumpMenuCandidatesScript() {
+  return r'''
+(function() {
+  var items = document.querySelectorAll('li, div[role="button"]');
+  var out = [];
+  items.forEach(function(el, idx) {
+    var rect = el.getBoundingClientRect();
+    out.push({
+      idx: idx,
+      tag: el.tagName,
+      innerText: (el.innerText || '').trim().slice(0, 80),
+      testid: el.getAttribute('data-testid'),
+      ariaLabel: el.getAttribute('aria-label'),
+      rectW: Math.round(rect.width),
+      rectH: Math.round(rect.height),
+      visible: rect.width > 0 && rect.height > 0
+    });
+  });
+  return { count: out.length, items: out };
+})();
+''';
+}
+
+String buildStartMutationWatchScript() {
+  return r'''
+(function() {
+  window.__mwwAddedNodes = [];
+  window.__mwwObserver = new MutationObserver(function(records) {
+    records.forEach(function(r) {
+      r.addedNodes.forEach(function(n) {
+        if (n.nodeType === 1) window.__mwwAddedNodes.push(n);
+      });
+    });
+  });
+  window.__mwwObserver.observe(document.body, { childList: true, subtree: true });
+  return { ok: true };
+})();
+''';
+}
+
+
+String buildReadMutationWatchScript() {
+  return r'''
+(function() {
+  var nodes = window.__mwwAddedNodes || [];
+  if (window.__mwwObserver) window.__mwwObserver.disconnect();
+
+  var report = [];
+  nodes.forEach(function(root, rootIdx) {
+    if (!root.isConnected) return; // skip nodes removed again since
+    var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+    var all2 = [root].concat(Array.prototype.slice.call(all));
+    all2.forEach(function(el) {
+      var txt = (el.innerText || '').trim();
+      if (txt.length === 0 || txt.length > 40) return;
+      var rect = el.getBoundingClientRect();
+      report.push({
+        rootIdx: rootIdx,
+        tag: el.tagName,
+        text: txt,
+        testid: el.getAttribute('data-testid'),
+        role: el.getAttribute('role'),
+        dataIcon: el.getAttribute('data-icon'),
+        rectW: Math.round(rect.width),
+        rectH: Math.round(rect.height)
+      });
+    });
+  });
+
+  window.__mwwObserver = null;
+  window.__mwwAddedNodes = null;
+  return { ok: true, addedRootCount: nodes.length, report: report };
+})();
+''';
+}
+
+/// Mencari input[type="file"] dengan accept="*" (slot untuk "Document"),
+/// lalu MENANDAI elemen tersebut secara langsung lewat atribut
+/// `data-mww-doc-target`. Ini penting karena WhatsApp Web (React SPA)
+/// bisa remount/reorder node input di antara panggilan executeScript,
+/// sehingga index numerik (`docIndex`) saja tidak boleh dipercaya lagi
+/// saat file benar-benar di-assign nanti di
+/// [buildChunkedTransferFinishScript].
+String buildFindDocumentInputScript() {
+  return r'''
+(function() {
+  // Bersihkan tag lama kalau ada sisa dari percobaan sebelumnya yang gagal.
+  document.querySelectorAll('input[type="file"][data-mww-doc-target]').forEach(function(el) {
+    el.removeAttribute('data-mww-doc-target');
+  });
+
+  var inputs = document.querySelectorAll('input[type="file"]');
+  var out = [];
+  var docIndex = -1;
+  var docInput = null;
+  inputs.forEach(function(inp, idx) {
+    var accept = inp.getAttribute('accept');
+    out.push({
+      idx: idx,
+      accept: accept,
+      multiple: inp.multiple,
+      hidden: inp.hidden || inp.style.display === 'none'
+    });
+    if (accept === '*' && docIndex === -1) {
+      docIndex = idx;
+      docInput = inp;
+    }
+  });
+
+  // Tandai elemen aslinya (bukan cuma index-nya) supaya bisa ditemukan lagi
+  // dengan pasti walau DOM di-reorder/di-remount di antara sini dan
+  // finish-script.
+  if (docInput) {
+    docInput.setAttribute('data-mww-doc-target', '1');
+  }
+
+  return { count: inputs.length, inputs: out, docIndex: docIndex, tagged: !!docInput };
+})();
+''';
+}
+
+String buildChunkedTransferFinishScript({int? targetInputIndex}) {
+  final targetLiteral = targetInputIndex?.toString() ?? 'null';
   return '''
 (function() {
-  var diag = { ok: false, error: null, inputCount: 0, results: [], fileInfo: [] };
+  var diag = {
+    ok: false,
+    error: null,
+    inputCount: 0,
+    results: [],
+    fileInfo: [],
+    targetStrategy: null
+  };
   try {
     var buf = window.__mwwChunkBuffer;
     if (!buf) throw new Error('no chunk buffer — init script never ran?');
@@ -402,7 +379,6 @@ String buildChunkedTransferFinishScript() {
       }
       return new File([bytes], f.name, { type: f.type });
     });
-
     diag.fileInfo = fileObjects.map(function(f) {
       return { name: f.name, type: f.type, size: f.size };
     });
@@ -410,12 +386,54 @@ String buildChunkedTransferFinishScript() {
     var dataTransfer = new DataTransfer();
     fileObjects.forEach(function(f) { dataTransfer.items.add(f); });
 
-    var inputs = document.querySelectorAll('input[type="file"]');
-    diag.inputCount = inputs.length;
-    inputs.forEach(function(input, idx) {
+    var allInputs = document.querySelectorAll('input[type="file"]');
+    diag.inputCount = allInputs.length;
+
+    var inputs = null;
+
+    // Strategi 1: elemen persis yang sudah ditandai oleh
+    // buildFindDocumentInputScript — kebal terhadap reorder DOM karena kita
+    // mencari elemen itu sendiri, bukan posisinya di NodeList.
+    var tagged = document.querySelector('input[type="file"][data-mww-doc-target]');
+    if (tagged) {
+      inputs = [tagged];
+      diag.targetStrategy = 'tagged';
+    }
+
+    // Strategi 2: kalau tag sudah hilang (node lama sudah diganti total oleh
+    // React), scan ulang input dengan accept="*" secara segar.
+    if (!inputs) {
+      for (var i = 0; i < allInputs.length; i++) {
+        if (allInputs[i].getAttribute('accept') === '*') {
+          inputs = [allInputs[i]];
+          diag.targetStrategy = 'rescan-accept-star';
+          break;
+        }
+      }
+    }
+
+    // Strategi 3: fallback ke index lama yang dikirim dari Dart (bisa saja
+    // sudah basi kalau DOM berubah, tapi lebih baik daripada tidak ada).
+    var targetIdx = $targetLiteral;
+    if (!inputs && targetIdx !== null && allInputs[targetIdx]) {
+      inputs = [allInputs[targetIdx]];
+      diag.targetStrategy = 'stale-index';
+    }
+
+    // Strategi 4: tidak ada target spesifik sama sekali (kasus drop
+    // gambar/video biasa, targetInputIndex memang null dari awal) —
+    // broadcast ke semua input file yang ada.
+    if (!inputs) {
+      inputs = Array.prototype.slice.call(allInputs);
+      diag.targetStrategy = 'broadcast-all';
+    }
+
+    inputs.forEach(function(input) {
+      var idx = Array.prototype.indexOf.call(allInputs, input);
       var beforeAccept = input.getAttribute('accept');
       try {
         input.removeAttribute('accept');
+        input.removeAttribute('data-mww-doc-target');
         input.files = dataTransfer.files;
         var setCount = input.files ? input.files.length : -1;
         input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -446,12 +464,6 @@ String buildChunkedTransferFinishScript() {
 ''';
 }
 
-/// Best-effort MIME type guess for common WhatsApp attachment types.
-/// `XFile.mimeType` is often null on the Windows implementation of
-/// `desktop_drop`, and WhatsApp Web uses the MIME type (not just the
-/// extension) to decide how to preview/handle the attachment (image
-/// grid vs. generic document, etc.), so a reasonable guess here matters
-/// more than it would for a purely cosmetic feature.
 String guessMimeType(String fileName) {
   final ext = fileName.toLowerCase().split('.').last;
   const map = {
