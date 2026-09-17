@@ -2,10 +2,47 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:multi_whatsapp_web/core/constants/app_constants.dart';
+import 'package:multi_whatsapp_web/core/utils/memory_governor.dart';
 import 'package:multi_whatsapp_web/core/utils/memory_profiler.dart';
 import 'package:multi_whatsapp_web/domain/entities/account.dart';
 import 'package:multi_whatsapp_web/domain/repositories/webview_adapter.dart';
 
+/// Keeps a small set of accounts "warm".
+///
+/// MEMORY WATCHDOG — what it does and, more importantly, what it does NOT do
+/// -----------------------------------------------------------------------
+/// The kill message
+///
+///   `Unable to shrink memory footprint of process (628 MB) below the kill
+///    thresold (600 MB). Killed`
+///
+/// comes from WebKit's own MemoryPressureHandler running inside a single
+/// WebKitWebProcess (WTF/wtf/MemoryPressureHandler.cpp). WebKit notices that
+/// one process is over ITS OWN limit, calls releaseMemory(Critical::Yes),
+/// and kills the process when the footprint still doesn't come down. The
+/// Flutter app is not the thing being killed — the account's page is, which
+/// is why it comes back blank and reloads in a loop.
+///
+/// That has two consequences this class is built around, both learned the
+/// hard way from a previous version that made things worse:
+///
+/// 1. The threshold is PER WEB PROCESS. An earlier version compared a
+///    summed process-tree figure (1.4 GB over 5 processes) against the
+///    600 MB per-process number, so it was over budget permanently, and
+///    "relieve pressure" ran on every single poll. That was the reload loop.
+///
+/// 2. Dart cannot save a web process that is already over the line. WebKit
+///    has already tried a synchronous critical release by the time the
+///    message is printed; `reload()` moved the figure by 0.1 MB in the logs.
+///    Raising the limit and letting WebKit reclaim earlier is a WebKitGTK
+///    configuration job — see `linux/runner/webkit_multi_view_plugin.cc`.
+///
+/// So the watchdog now does only what Dart genuinely can do: free whole
+/// background accounts (each its own web process) when the MACHINE is short
+/// of memory, at most once every [AppConstants.pressureCooldown]. It never
+/// touches the active session, and it is disabled entirely off Linux —
+/// WebView2 on Windows has no such kill, and the pool there behaves exactly
+/// as it did before any of this.
 class SessionPoolManager {
   SessionPoolManager({
     required WebViewAdapter webViewAdapter,
@@ -13,17 +50,20 @@ class SessionPoolManager {
     Duration? idleEvictionTimeout,
     Duration? idleSweepInterval,
     Duration? activeSessionReloadInterval,
+    Duration? memoryPollInterval,
+    MemoryGovernor? memoryGovernor,
+    bool? enableMemoryWatchdog,
   }) : _adapter = webViewAdapter,
        _maxWarmSessions =
            maxWarmSessions ?? AppConstants.maxRecommendedDesktopSessions,
+       _governor = memoryGovernor ?? MemoryGovernor(),
+       _watchdogEnabled =
+           enableMemoryWatchdog ?? AppConstants.memoryWatchdogEnabled,
        _idleEvictionTimeout =
-           // Diturunkan dari 10 menit -> 3 menit. Ini penting untuk total RAM:
-           // "suspend" (about:blank) di native plugin hanya melepas JS heap,
-           // tapi WebProcess + NetworkProcess akun itu (~150-250MB) TETAP
-           // hidup selama masih "warm". Baru saat idle-eviction ini jalan
-           // (unloadFromMemory -> destroy), kedua proses itu benar-benar
-           // dimatikan dan RAM-nya kembali ke sistem. Akun yang memang jarang
-           // dipakai jadi lebih cepat "dilepas" total, bukan cuma dibekukan.
+           // "suspend" only releases the JS heap; the account's WebProcess +
+           // NetworkProcess (~150-250MB) stay alive for as long as it is
+           // warm. Only idle eviction below (unloadFromMemory -> destroy)
+           // actually hands that RAM back.
            idleEvictionTimeout ?? const Duration(minutes: 3) {
     final interval =
         idleSweepInterval ??
@@ -32,39 +72,31 @@ class SessionPoolManager {
         );
     _idleSweepTimer = Timer.periodic(interval, (_) => _sweepIdleSessions());
 
-    // FIX (memory growing unboundedly the longer an account is actively
-    // used — observed climbing past ~800MB-1GB+ per account on real
-    // usage, confirmed via WebKitWebProcess RSS, well before this timer
-    // used to fire): `_sweepIdleSessions()` above only ever touches
-    // BACKGROUNDED accounts (the ones in `_pausedSince`) — the currently
-    // ACTIVE account is deliberately skipped there and is never added to
-    // `_pausedSince` in the first place, so nothing in this class ever
-    // reclaimed memory it built up (decoded images/video, growing JS
-    // heap from chat history) just from being scrolled through and used
-    // normally over a long session.
-    //
-    // NOTE: this fixed interval is now a fallback safety net only. The
-    // primary defense lives in the native plugin
-    // (linux/runner/webkit_multi_view_plugin.cc), which polls each
-    // account's *actual* WebKitWebProcess RSS via /proc every 60s and
-    // reloads it as soon as it crosses a real memory threshold — this
-    // Dart-side timer can't see real WebProcess memory at all
-    // (`MemoryProfiler.currentRss` below only reads the main Flutter/GTK
-    // process's own RSS, not the WebKitWebProcess children), so it was
-    // previously a blind guess. Shortened from 2h to 20m purely as a
-    // backstop in case the native watchdog's PID-detection heuristic
-    // ever fails to resolve a process.
+    // Fallback safety net for the active account, whose memory grows purely
+    // from being used (decoded images/video, growing JS heap from chat
+    // history). Unchanged from the original, on every platform.
     _activeReloadTimer = Timer.periodic(
       activeSessionReloadInterval ?? const Duration(minutes: 20),
       (_) => _reloadActiveSession(),
     );
+
+    if (_watchdogEnabled) {
+      _memoryTimer = Timer.periodic(
+        memoryPollInterval ?? AppConstants.memoryPollInterval,
+        (_) => _onMemoryTick(),
+      );
+    }
   }
 
   final WebViewAdapter _adapter;
   final int _maxWarmSessions;
   final Duration _idleEvictionTimeout;
+  final MemoryGovernor _governor;
+  final bool _watchdogEnabled;
+
   late final Timer _idleSweepTimer;
   late final Timer _activeReloadTimer;
+  Timer? _memoryTimer;
 
   final LinkedHashMap<String, WebViewSessionHandle> _warm =
       LinkedHashMap<String, WebViewSessionHandle>();
@@ -73,23 +105,33 @@ class SessionPoolManager {
 
   String? _activeAccountId;
 
+  bool _disposed = false;
+  bool _relievingPressure = false;
+  DateTime? _lastPressureAction;
+
   Future<void> _lock = Future<void>.value();
 
   int get warmCount => _warm.length;
 
-  /// Whether [accountId] already has a warm (created & navigated) session
-  /// sitting in the pool — used to decide whether switching to it needs
-  /// to show a loading placeholder at all.
   bool isWarm(String accountId) => _warm.containsKey(accountId);
+
+  /// Last reading taken by the watchdog — for the §26 "resource dimonitor"
+  /// UI, so it can show per-process figures including the WebKit children
+  /// rather than the misleading main-process-only number.
+  MemorySnapshot? get lastMemorySnapshot => _lastSnapshot;
+  MemorySnapshot? _lastSnapshot;
+
+  Future<T> _runLocked<T>(Future<T> Function() action) {
+    final result = _lock.then((_) => action());
+    _lock = result.then((_) {}, onError: (_) {});
+    return result;
+  }
 
   Future<WebViewSessionHandle> acquire(
     Account account, {
     bool keepPaused = false,
   }) {
-    final result = _lock.then((_) => _acquireLocked(account, keepPaused));
-
-    _lock = result.then((_) {}, onError: (_) {});
-    return result;
+    return _runLocked(() => _acquireLocked(account, keepPaused));
   }
 
   Future<WebViewSessionHandle> _acquireLocked(
@@ -98,30 +140,14 @@ class SessionPoolManager {
   ) async {
     final previousActiveId = _activeAccountId;
 
-    print(
-      '[SessionPoolManager] acquire(${account.id}) — warmCount=${_warm.length} '
-      '(cap=$_maxWarmSessions), already warm=${_warm.containsKey(account.id)}, '
-      'warm ids=${_warm.keys.toList()}, keepPaused=$keepPaused',
-    );
-
     if (_warm.containsKey(account.id)) {
       final handle = _warm.remove(account.id)!;
       _warm[account.id] = handle;
-      // FIX (celah keamanan lock: akun yang di-lock kembali "kebuka"
-      // begitu di-switch balik ke sana): sebelumnya baris ini SELALU
-      // dipanggil untuk akun manapun yang sudah warm, tanpa peduli
-      // apakah AccountLockCubit bilang akun ini masih harus tetap
-      // tersembunyi. Di Linux, WebKitWebView native itu overlay GTK
-      // TERPISAH di atas Flutter (lihat my_application.cc) — begitu
-      // `resumeRendering()` (`setVisible(true)`) dipanggil, kontennya
-      // langsung tampil di layar, TIDAK PEDULI widget Flutter apa yang
-      // sedang di-render di baliknya (termasuk AccountLockedScreen).
-      // Sekarang: kalau caller bilang `keepPaused` (akun ini masih
-      // harus terkunci), jangan resume sama sekali — biarkan tetap
-      // hidden persis seperti saat di-pause waktu di-lock. Nanti begitu
-      // password benar dimasukkan, `resumeRendering()` yang sudah ada
-      // di alur unlock (lihat dashboard_desktop_page.dart /
-      // dashboard_mobile_page.dart) yang akan menampilkannya.
+      // Lock safety: on Linux the WebKitWebView is a separate GTK overlay on
+      // top of Flutter, so resuming it shows the content regardless of which
+      // Flutter widget (e.g. AccountLockedScreen) is drawn behind it. If the
+      // caller says this account must stay locked, never resume here — the
+      // unlock flow calls resumeRendering() itself.
       if (!keepPaused) {
         await handle.resumeRendering();
       }
@@ -131,8 +157,9 @@ class SessionPoolManager {
       return handle;
     }
 
-    if (_warm.length >= _maxWarmSessions) {
-      await _evictLeastRecentlyUsed();
+    while (_warm.length >= _maxWarmSessions) {
+      final evicted = await _evictLeastRecentlyUsed();
+      if (!evicted) break;
     }
 
     final handle = await MemoryProfiler.logAround(
@@ -150,15 +177,19 @@ class SessionPoolManager {
     try {
       await handle.navigateToWhatsAppWeb();
     } catch (e) {
+      // FIX (leak): the failed handle used to stay in `_warm` forever — a
+      // live web process nobody could reach, counted against the cap and
+      // never evicted because it was also `_activeAccountId`.
+      _warm.remove(account.id);
+      if (_activeAccountId == account.id) _activeAccountId = null;
+      try {
+        await handle.unloadFromMemory();
+        await handle.dispose();
+      } catch (_) {}
       rethrow;
     }
 
     if (keepPaused) {
-      // Rare edge case: switching (while locked) to an account that was
-      // never warmed up before in this run — the native view briefly
-      // exists/loads before we can hide it (unavoidable with the
-      // current per-platform adapters), but we still make sure it ends
-      // up hidden rather than left visible.
       await handle.pauseRendering();
     }
 
@@ -175,7 +206,132 @@ class SessionPoolManager {
     }
   }
 
+  // -------------------------------------------------------------------
+  // Memory watchdog (Linux only)
+  // -------------------------------------------------------------------
+
+  Future<void> _onMemoryTick() async {
+    if (_disposed || _relievingPressure) return;
+
+    final snapshot = await _governor.snapshot();
+    if (snapshot == null) return;
+    _lastSnapshot = snapshot;
+
+    final reason = _pressureReason(snapshot);
+    if (reason == null) return;
+
+    // A cooldown, and background sessions to give up, are both required. If
+    // only the active account is warm there is nothing this class can do,
+    // and saying so once is far better than reloading the user's page every
+    // poll in the hope the number moves.
+    final last = _lastPressureAction;
+    if (last != null &&
+        DateTime.now().difference(last) < AppConstants.pressureCooldown) {
+      return;
+    }
+    if (_leastRecentlyUsedBackgroundId() == null) {
+      _governor.log('$reason — nothing to free (only the active account)', snapshot);
+      _lastPressureAction = DateTime.now();
+      return;
+    }
+
+    _relievingPressure = true;
+    try {
+      await _runLocked(() => _freeBackgroundSessions(snapshot, reason));
+    } finally {
+      _relievingPressure = false;
+      _lastPressureAction = DateTime.now();
+    }
+  }
+
+  /// Returns why we should act, or null if everything is fine.
+  ///
+  /// Deliberately narrow. The old version treated "summed tree RSS over
+  /// 420 MB" as an emergency, which on this app is simply its normal
+  /// resting state.
+  String? _pressureReason(MemorySnapshot snapshot) {
+    final ratio = snapshot.systemAvailableRatio;
+    if (ratio != null && ratio < AppConstants.systemLowMemoryRatio) {
+      return 'machine low on memory (${(ratio * 100).toStringAsFixed(0)}% free)';
+    }
+
+    // A web process nearing WebKit's per-process kill threshold. Freeing
+    // background accounts won't shrink the offender, but it does remove
+    // competing processes and, if the offender IS a background account, it
+    // is the direct fix.
+    final warnBytes =
+        (AppConstants.webProcessKillThresholdBytes *
+                AppConstants.webProcessWarnRatio)
+            .round();
+    final biggest = snapshot.largestWebProcess;
+    if (biggest != null && biggest.bytes >= warnBytes) {
+      return 'web process ${biggest.pid} at ${biggest.mb.toStringAsFixed(0)} MB '
+          '(WebKit kills at '
+          '${(AppConstants.webProcessKillThresholdBytes / (1024 * 1024)).round()} MB)';
+    }
+    return null;
+  }
+
+  Future<void> _freeBackgroundSessions(
+    MemorySnapshot snapshot,
+    String reason,
+  ) async {
+    _governor.log('$reason — freeing background accounts', snapshot);
+
+    // One round only: drop every background account that has been idle for
+    // the grace period. Bounded work, no re-measure loop, no way to spiral.
+    while (true) {
+      final victim = _leastRecentlyUsedBackgroundId(
+        minimumIdle: AppConstants.pressureIdleGrace,
+      );
+      if (victim == null) break;
+      await _destroy(victim, reason: reason);
+    }
+
+    await Future<void>.delayed(AppConstants.memorySettleDelay);
+    if (_disposed) return;
+    final after = await _governor.snapshot();
+    if (after != null) {
+      _lastSnapshot = after;
+      _governor.log('after freeing background accounts', after);
+    }
+  }
+
+  /// LRU order comes from `_warm`'s insertion order (re-inserted on every
+  /// acquire). The active account is never a candidate — it belongs to the
+  /// user, not to the watchdog.
+  String? _leastRecentlyUsedBackgroundId({Duration? minimumIdle}) {
+    final now = DateTime.now();
+    for (final id in _warm.keys) {
+      if (id == _activeAccountId) continue;
+      if (minimumIdle != null) {
+        final since = _pausedSince[id];
+        if (since != null && now.difference(since) < minimumIdle) continue;
+      }
+      return id;
+    }
+    return null;
+  }
+
+  Future<void> _destroy(String accountId, {required String reason}) async {
+    final handle = _warm.remove(accountId);
+    _pausedSince.remove(accountId);
+    if (handle == null) return;
+    await MemoryProfiler.logAround(
+      'destroy session $accountId ($reason)',
+      () async {
+        try {
+          await handle.unloadFromMemory();
+        } catch (_) {}
+        try {
+          await handle.dispose();
+        } catch (_) {}
+      },
+    );
+  }
+
   Future<void> _sweepIdleSessions() async {
+    if (_disposed) return;
     final now = DateTime.now();
     final idleIds = _pausedSince.entries
         .where((e) => now.difference(e.value) >= _idleEvictionTimeout)
@@ -187,16 +343,7 @@ class SessionPoolManager {
         _pausedSince.remove(id);
         continue;
       }
-      final handle = _warm.remove(id);
-      _pausedSince.remove(id);
-      if (handle == null) continue;
-      await MemoryProfiler.logAround(
-        'idle-unload session $id (paused >= ${_idleEvictionTimeout.inMinutes}m)',
-        () async {
-          await handle.unloadFromMemory();
-          await handle.dispose();
-        },
-      );
+      await _destroy(id, reason: 'idle >= ${_idleEvictionTimeout.inMinutes}m');
     }
   }
 
@@ -211,48 +358,35 @@ class SessionPoolManager {
     );
   }
 
-  Future<void> _evictLeastRecentlyUsed() async {
-    if (_warm.isEmpty) return;
-    final lruId = _warm.keys.first;
-
-    final handle = _warm.remove(lruId);
-    _pausedSince.remove(lruId);
-    if (handle != null) {
-      await MemoryProfiler.logAround('evict LRU session $lruId', () async {
-        await handle.unloadFromMemory();
-        await handle.dispose();
-      });
-      // NOTE: the old Platform.isWindows 1200ms post-eviction delay was
-      // a workaround for the single-shared-WebView2-environment race
-      // (waiting for the previous account's environment teardown before
-      // the next account could grab the one shared environment). Now
-      // that each account gets its own independent environmentId (see
-      // windows_webview_adapter.dart), there's no shared resource to
-      // race against, so this artificial delay is no longer needed.
-    }
+  Future<bool> _evictLeastRecentlyUsed() async {
+    final lruId = _leastRecentlyUsedBackgroundId();
+    if (lruId == null) return false;
+    await _destroy(lruId, reason: 'LRU eviction (cap $_maxWarmSessions)');
+    return true;
   }
 
-  Future<void> evict(String accountId) async {
-    final handle = _warm.remove(accountId);
-    _pausedSince.remove(accountId);
-    if (handle == null) return;
-    await handle.unloadFromMemory();
-    await handle.dispose();
-    if (_activeAccountId == accountId) _activeAccountId = null;
+  Future<void> evict(String accountId) {
+    return _runLocked(() async {
+      await _destroy(accountId, reason: 'explicit evict');
+      if (_activeAccountId == accountId) _activeAccountId = null;
+    });
   }
 
-  Future<void> disposeAll() async {
-    for (final handle in _warm.values) {
-      await handle.unloadFromMemory();
-      await handle.dispose();
-    }
-    _warm.clear();
-    _pausedSince.clear();
-    _activeAccountId = null;
+  Future<void> disposeAll() {
+    return _runLocked(() async {
+      for (final id in _warm.keys.toList(growable: false)) {
+        await _destroy(id, reason: 'shutdown');
+      }
+      _warm.clear();
+      _pausedSince.clear();
+      _activeAccountId = null;
+    });
   }
 
   void dispose() {
+    _disposed = true;
     _idleSweepTimer.cancel();
     _activeReloadTimer.cancel();
+    _memoryTimer?.cancel();
   }
 }

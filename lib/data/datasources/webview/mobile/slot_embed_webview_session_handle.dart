@@ -35,6 +35,25 @@ class SlotAllocator {
     _accountToSlot[accountId] = freeIndex;
     return freeIndex;
   }
+
+  /// FIX: slots used to be handed out and never given back, so every account
+  /// opened during a run permanently owned one of the six WebView processes —
+  /// both a hard "restart the app" wall at six accounts, and six live
+  /// processes' worth of memory counted against the app.
+  ///
+  /// Safe to call once the remote service has been released (the handle's
+  /// `dispose()`); `WebView.setDataDirectorySuffix()` is called per PROCESS,
+  /// and the service process is torn down with the slot, so the next account
+  /// to take this slot gets a fresh process and sets its own suffix.
+  void release(String accountId) {
+    final slot = _accountToSlot.remove(accountId);
+    if (slot == null) return;
+    _slotToAccount[slot] = null;
+  }
+
+  /// True if [accountId] currently owns a slot — lets callers avoid touching
+  /// `slot` (which would allocate one) just to check.
+  bool hasSlot(String accountId) => _accountToSlot.containsKey(accountId);
 }
 
 /// Embeds `SlotEmbedView` (a same-process `SurfaceView` in the Flutter
@@ -125,6 +144,11 @@ class SlotEmbedWebViewSessionHandle implements WebViewSessionHandle {
   @override
   Future<void> dispose() async {
     await unloadFromMemory();
+    // Only release a slot we actually took — touching `slot` here would
+    // otherwise allocate one just to hand it straight back.
+    if (SlotAllocator.instance.hasSlot(accountId)) {
+      SlotAllocator.instance.release(accountId);
+    }
     await _statusController.close();
   }
 }

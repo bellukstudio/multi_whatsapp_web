@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -19,36 +21,39 @@ class SessionCubit extends Cubit<SessionState> {
     required AccountRepository accountRepository,
     required FormFactor formFactor,
     SessionPoolManager? poolManager,
-    // FIX (lock akun "kebuka" lagi begitu di-switch balik ke sana,
-    // terutama kentara di Linux — lihat SessionPoolManager.acquire()):
-    // SessionCubit sebelumnya tidak tahu apa-apa soal AccountLockCubit,
-    // jadi selalu meng-`resumeRendering()` akun manapun yang sudah warm
-    // tanpa peduli status lock-nya. Callback ini opsional (default:
-    // tidak ada akun yang locked) supaya SessionCubit tetap tidak
-    // ter-couple langsung ke AccountLockCubit — cukup diberi tahu
-    // "apakah accountId ini SEHARUSNYA masih tersembunyi di balik layar
-    // kunci sekarang", biasanya diisi dengan
+    // Lock safety: SessionCubit used to always `resumeRendering()` any warm
+    // account regardless of its lock state. This optional callback (default:
+    // nothing is locked) tells it whether an account should stay hidden,
+    // without coupling it to AccountLockCubit — normally filled with
     // `accountLockCubit.isSessionLocked`.
     bool Function(String accountId)? isAccountSessionLocked,
   }) : _webViewAdapter = webViewAdapter,
-        _accountRepository = accountRepository,
-        _formFactor = formFactor,
-        _isAccountSessionLocked = isAccountSessionLocked,
-        _pool = formFactor == FormFactor.desktop
-            ? (poolManager ??
-            SessionPoolManager(
-              webViewAdapter: webViewAdapter,
-             
-            ))
-            : null,
-        super(const SessionState());
+       _accountRepository = accountRepository,
+       _formFactor = formFactor,
+       _isAccountSessionLocked = isAccountSessionLocked,
+       super(const SessionState()) {
+    _pool = formFactor == FormFactor.desktop
+        ? (poolManager ?? SessionPoolManager(webViewAdapter: webViewAdapter))
+        : null;
+  }
 
   final WebViewAdapter _webViewAdapter;
   final AccountRepository _accountRepository;
   final FormFactor _formFactor;
   final bool Function(String accountId)? _isAccountSessionLocked;
 
-  final SessionPoolManager? _pool;
+  late final SessionPoolManager? _pool;
+
+  /// FIX (unbounded listener growth): `handle.statusStream.listen(...)` used
+  /// to run on EVERY switch, including switches back to an already-warm
+  /// handle, and nothing was ever cancelled. Ten switches between two
+  /// accounts left ten live subscriptions on the same broadcast stream, each
+  /// firing its own repository write on every status change — a slow leak of
+  /// both memory and IO that grew for as long as the app stayed open. Now
+  /// there is at most one subscription per account, cancelled when the
+  /// session goes away.
+  final Map<String, StreamSubscription<AccountConnectionStatus>> _statusSubs =
+      {};
 
   Future<void> _switchLock = Future<void>.value();
 
@@ -59,7 +64,6 @@ class SessionCubit extends Cubit<SessionState> {
   }
 
   Future<void> _switchToLocked(Account account) async {
-  
     final alreadyWarm = _formFactor == FormFactor.mobile
         ? _mobileWarm.containsKey(account.id)
         : (_pool?.isWarm(account.id) ?? false);
@@ -89,20 +93,15 @@ class SessionCubit extends Cubit<SessionState> {
           status: ActiveSessionStatus.error,
           activeAccountId: account.id,
           errorMessage: e.toString(),
-
           errorNeedsAppRestart:
-          e is WebView2RuntimeMissingException &&
+              e is WebView2RuntimeMissingException &&
               e.isDispatcherQueueConflict,
         ),
       );
       return;
     }
 
-    handle.statusStream.listen(
-          (status) =>
-          _accountRepository.updateStatus(id: account.id, status: status),
-      onError: (_) {},
-    );
+    _listenToStatusOnce(account.id, handle);
 
     await _accountRepository.setActiveAccount(account.id);
 
@@ -115,24 +114,76 @@ class SessionCubit extends Cubit<SessionState> {
     );
   }
 
+  void _listenToStatusOnce(String accountId, WebViewSessionHandle handle) {
+    if (_statusSubs.containsKey(accountId)) return;
+    _statusSubs[accountId] = handle.statusStream.listen(
+      (status) =>
+          _accountRepository.updateStatus(id: accountId, status: status),
+      onError: (_) {},
+      cancelOnError: false,
+    );
+  }
+
+  Future<void> _cancelStatusSub(String accountId) async {
+    final sub = _statusSubs.remove(accountId);
+    if (sub != null) await sub.cancel();
+  }
+
   final Map<String, WebViewSessionHandle> _mobileWarm = {};
 
   Future<WebViewSessionHandle> _switchMobile(Account account) async {
     final existing = _mobileWarm[account.id];
     if (existing != null) {
+      await _releaseOtherMobileSessions(keep: account.id);
       return existing;
     }
 
+    // FIX (mobile OOM): PRD §27 mandates at most
+    // [AppConstants.maxActiveWebViewsOnMobile] live WebView per app run, but
+    // `_mobileWarm` was append-only — every account ever opened kept its
+    // WebView (and, on Android, its whole `android:process` slot) alive for
+    // the rest of the run. Four accounts was enough to sit around 700 MB.
+    // Release the others BEFORE creating the new one, so the two never
+    // overlap at peak.
+    await _releaseOtherMobileSessions(keep: account.id);
+
     final handle = await MemoryProfiler.logAround(
       'create_mobile_session_${account.id}',
-          () => _webViewAdapter.createOrResumeSession(
+      () => _webViewAdapter.createOrResumeSession(
         accountId: account.id,
         sessionPath: account.sessionPath,
+        accountName: account.name,
       ),
     );
     await handle.navigateToWhatsAppWeb();
     _mobileWarm[account.id] = handle;
     return handle;
+  }
+
+  Future<void> _releaseOtherMobileSessions({required String keep}) async {
+    final stale = _mobileWarm.keys
+        .where((id) => id != keep)
+        .toList(growable: false);
+    // Keep the most recent (maxActiveWebViewsOnMobile - 1) besides the one
+    // being switched to; with the default of 1 that means releasing them all.
+    final keepExtra = (AppConstants.maxActiveWebViewsOnMobile - 1)
+        .clamp(0, stale.length)
+        .toInt();
+    final toRelease = stale.sublist(0, stale.length - keepExtra);
+
+    for (final id in toRelease) {
+      final handle = _mobileWarm.remove(id);
+      if (handle == null) continue;
+      await _cancelStatusSub(id);
+      await MemoryProfiler.logAround('release_mobile_session_$id', () async {
+        try {
+          await handle.unloadFromMemory();
+        } catch (_) {}
+        try {
+          await handle.dispose();
+        } catch (_) {}
+      });
+    }
   }
 
   Future<void> reloadActive() async {
@@ -154,17 +205,23 @@ class SessionCubit extends Cubit<SessionState> {
     try {
       final handle = await MemoryProfiler.logAround(
         'reload_mobile_session_on_resume',
-            () => _webViewAdapter.reloadFromPersistedStorage(
+        () => _webViewAdapter.reloadFromPersistedStorage(
           accountId: activeAccount.id,
           sessionPath: activeAccount.sessionPath,
+          accountName: activeAccount.name,
         ),
       );
       await handle.navigateToWhatsAppWeb();
       final stale = _mobileWarm[activeAccount.id];
       if (stale != null && !identical(stale, handle)) {
+        await _cancelStatusSub(activeAccount.id);
+        try {
+          await stale.unloadFromMemory();
+        } catch (_) {}
         await stale.dispose();
       }
       _mobileWarm[activeAccount.id] = handle;
+      _listenToStatusOnce(activeAccount.id, handle);
       emit(state.copyWith(status: ActiveSessionStatus.ready, handle: handle));
     } catch (e) {
       emit(
@@ -181,11 +238,12 @@ class SessionCubit extends Cubit<SessionState> {
     if (state.handle == null) return;
     await MemoryProfiler.logAround(
       'unload_mobile_session_on_background',
-          () => state.handle!.unloadFromMemory(),
+      () => state.handle!.unloadFromMemory(),
     );
   }
 
   Future<void> releaseAccount(String accountId) async {
+    await _cancelStatusSub(accountId);
     if (_formFactor == FormFactor.desktop) {
       await _pool!.evict(accountId);
     } else {
@@ -202,12 +260,19 @@ class SessionCubit extends Cubit<SessionState> {
 
   @override
   Future<void> close() async {
+    for (final sub in _statusSubs.values) {
+      await sub.cancel();
+    }
+    _statusSubs.clear();
+
     if (_formFactor == FormFactor.desktop) {
       await _pool?.disposeAll();
-
       _pool?.dispose();
     } else {
       for (final handle in _mobileWarm.values) {
+        try {
+          await handle.unloadFromMemory();
+        } catch (_) {}
         await handle.dispose();
       }
       _mobileWarm.clear();

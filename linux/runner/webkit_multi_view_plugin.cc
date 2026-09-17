@@ -19,19 +19,48 @@
 #define SUSPEND_DELAY_SECONDS 30
 
 // Interval pengecekan RSS asli tiap WebProcess lewat /proc.
-#define MEMORY_WATCHDOG_INTERVAL_SECONDS 60
+//
+// FIX (log kill masih muncul walau MemoryWatchdogCallback sudah pakai
+// terminate_web_process(), 900MB limit, 800MB ambang recycle — kill
+// berikutnya di 995MB): interval ini SEBELUMNYA 60 detik, 6x lebih jarang
+// daripada WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS (10 detik) di bawah,
+// yaitu seberapa sering WebKit SENDIRI mengecek RSS internal-nya. Kalau
+// RSS naik cepat (chat berat/banyak media), gampang melompat dari di
+// bawah ambang recycle kita ke atas kill_threshold WebKit DALAM SATU
+// jendela 60 detik itu — kita belum sempat cek, WebKit sudah lebih dulu
+// membunuhnya sendiri. Diturunkan ke 8 detik supaya watchdog kita selalu
+// dapat giliran cek lebih dulu daripada WebKit.
+#define MEMORY_WATCHDOG_INTERVAL_SECONDS 8
 
-// Ambang RSS per akun (WebProcess) yang memicu auto-reload dari SISI LUAR
-// (via /proc, dicek tiap MEMORY_WATCHDOG_INTERVAL_SECONDS). Sekarang ini
-// cuma jaring pengaman KEDUA — pertahanan utama ada di
-// WEB_PROCESS_MEMORY_LIMIT_MB / *_THRESHOLD di bawah, yang membuat WebKit
-// SENDIRI membunuh WebProcess-nya begitu lewat batas (lebih presisi &
-// lebih cepat daripada polling /proc setiap 60 detik).
-#define MEMORY_RELOAD_THRESHOLD_BYTES (600LL * 1024 * 1024)
+// Ambang RSS per akun (WebProcess) yang memicu recycle proaktif dari SISI
+// LUAR (via /proc, dicek tiap MEMORY_WATCHDOG_INTERVAL_SECONDS = 8 detik
+// — sengaja lebih cepat daripada WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS
+// di bawah, supaya jaring pengaman ini yang menang duluan, bukan WebKit).
+//
+// Dipasang JAUH di bawah WEB_PROCESS_MEMORY_LIMIT_MB (bukan sedikit di
+// bawah seperti sebelumnya) supaya jaring pengaman ini sempat menangani
+// lonjakan
+// RSS lebih dulu lewat webkit_web_view_reload() (proses yang SAMA, lebih
+// murah) sebelum WebKit sendiri sampai ke kill_threshold dan membunuh
+// prosesnya. Kalau nilainya sama persis seperti sebelumnya, keduanya
+// balapan menuju garis finish yang sama dan yang menang hampir selalu sisi
+// internal WebKit (poll tiap 10 detik vs /proc tiap 60 detik).
+#define MEMORY_RELOAD_THRESHOLD_BYTES (650LL * 1024 * 1024)
 
-// Jangan reload akun yang sama dua kali dalam jendela waktu ini, supaya
-// tidak terjadi reload berulang selagi proses lama masih benar-benar exit.
-#define MEMORY_RELOAD_COOLDOWN_SECONDS 300
+// Jangan recycle akun yang sama dua kali dalam jendela waktu ini, supaya
+// tidak terjadi recycle berulang selagi proses lama masih benar-benar
+// exit dan proses baru masih resolve PID-nya (lihat ResolvePidCallback).
+//
+// FIX: nilai sebelumnya (300 detik / 5 menit) berarti begitu satu akun
+// di-recycle, akun itu TIDAK dipantau sama sekali selama 5 menit
+// berikutnya (lihat `continue` di MemoryWatchdogCallback). Kalau proses
+// barunya tumbuh cepat lagi (dipakai berat terus-menerus), dia bisa lewat
+// WEB_PROCESS_MEMORY_LIMIT_MB dan kena kill WebKit tanpa sempat kita
+// tangani proaktif sama sekali — persis pola kill berulang yang masih
+// terlihat. Diturunkan jauh, cukup untuk membiarkan proses lama benar-
+// benar exit dan PID baru ter-resolve (~beberapa detik), bukan untuk
+// mencegah pemantauan RSS berikutnya.
+#define MEMORY_RELOAD_COOLDOWN_SECONDS 20
 
 // --- Hard cap asli WebKit, per WebProcess ---
 // Ini pagar utama untuk menekan total RAM. WebKit punya monitor memori
@@ -44,14 +73,58 @@
 // WebProcess baru yang bersih. Efeknya: RAM per akun praktis TIDAK PERNAH
 // jauh melewati angka ini, bukan cuma "biasanya segini".
 //
-// Turunkan angka ini kalau mau RAM lebih hemat lagi (dengan konsekuensi
-// akun akan lebih sering "kick & reload" saat dipakai berat — chat besar,
-// banyak media, panggilan suara/video).
-#define WEB_PROCESS_MEMORY_LIMIT_MB 300
-#define WEB_PROCESS_CONSERVATIVE_THRESHOLD 0.5   // mulai buang cache non-kritis
-#define WEB_PROCESS_STRICT_THRESHOLD 0.75         // mulai buang memori kritis
-#define WEB_PROCESS_KILL_THRESHOLD 1.0            // >= 300MB -> proses dibunuh & di-respawn
+// FIX (log "Unable to shrink memory footprint of process (618/691/727 MB)
+// below the kill thresold (600 MB). Killed" berulang terus):
+// Nilai sebelumnya (600MB) sama persis dengan pemakaian NORMAL WhatsApp
+// Web sendiri (500-800MB dengan chat besar/media terbuka, ditulis di
+// komentar lama di bawah). Artinya kill_threshold selalu tercapai lambat
+// atau cepat walau tidak ada leak sama sekali, lalu OnWebProcessTerminated
+// langsung load_uri ulang TANPA jeda sama sekali — WebProcess baru memuat
+// ulang WhatsApp Web dari nol (yang sendirinya sempat menaikkan RSS saat
+// loading), lalu balik lagi ke pemakaian normalnya yang notabene sudah di
+// atas 600MB, kena limit lagi dalam hitungan detik/menit. Itulah loop
+// "restart terus" yang terlihat dari luar.
+//
+// Sekarang limit dinaikkan jauh di atas pemakaian normal (bukan pas-pasan
+// dengannya), supaya kill_threshold betul-betul jadi *backstop* untuk
+// leak/anomali sungguhan, bukan ambang yang pasti kena di pemakaian wajar.
+// Reclaim dini tetap jalan lebih awal (lihat threshold fraction di bawah)
+// supaya WebKit sempat membuang cache sebelum mendekati limit ini, dan
+// OnWebProcessTerminated sekarang punya backoff (lihat WEB_PROCESS_KILL_
+// BACKOFF_* di bawah) untuk kill yang berturut-turut, jadi walau limit ini
+// suatu saat tetap kena, tidak langsung disusul reload instan yang memicu
+// loop lagi.
+//
+// Turunkan angka ini kalau mau RAM lebih hemat (dengan konsekuensi akun
+// akan lebih sering "kick & reload" saat dipakai berat — chat besar,
+// banyak media, panggilan suara/video) — tapi jaga tetap di ATAS pemakaian
+// normal WhatsApp Web (500-800MB), jangan dipasang pas-pasan dengannya
+// seperti sebelumnya.
+#define WEB_PROCESS_MEMORY_LIMIT_MB 900
+#define WEB_PROCESS_CONSERVATIVE_THRESHOLD 0.45  // mulai buang cache non-kritis lebih awal (~400MB)
+#define WEB_PROCESS_STRICT_THRESHOLD 0.70         // mulai buang memori kritis (~630MB)
+#define WEB_PROCESS_KILL_THRESHOLD 1.0            // >= 900MB -> proses dibunuh & di-respawn (backstop, bukan ambang normal)
 #define WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS 10.0 // WebKit cek RSS internal tiap 10 detik
+
+// --- Backoff untuk reload setelah WebProcess dibunuh WebKit sendiri ---
+// FIX (bagian kedua dari death-spiral di atas): OnWebProcessTerminated
+// sebelumnya selalu langsung webkit_web_view_load_uri() tanpa jeda begitu
+// EXCEEDED_MEMORY_LIMIT/CRASHED terjadi, tidak peduli ini kill pertama
+// atau yang kelima kalinya beruntun. Kalau akun memang secara konsisten
+// lewat limit (bukan cuma sesekali), reload instan berulang hanya
+// mempercepat siklusnya. Sekarang tiap view punya hitungan "kill
+// beruntun" (reset kalau sudah tenang > KILL_BACKOFF_RESET_WINDOW_SECONDS)
+// dan reload berikutnya ditunda makin lama tiap kali terjadi lagi dalam
+// jendela waktu itu.
+#define WEB_PROCESS_KILL_BACKOFF_RESET_WINDOW_SECONDS 120
+// Delay (detik) sebelum reload, diindeks oleh (consecutive_kills - 1).
+// Kill pertama: hampir instan (biar akun terasa tetap nyambung). Kill
+// berikutnya yang masih dalam jendela reset di atas: makin lama, supaya
+// WebProcess baru sempat "istirahat" alih-alih langsung diberi beban
+// penuh WhatsApp Web lagi.
+static const int kWebProcessKillBackoffDelaysSeconds[] = {1, 5, 15, 30, 60};
+#define WEB_PROCESS_KILL_BACKOFF_MAX_INDEX \
+    (static_cast<int>(sizeof(kWebProcessKillBackoffDelaysSeconds) / sizeof(int)) - 1)
 
 struct ViewGeometry {
     gint x = 0;
@@ -69,6 +142,11 @@ struct ViewGeometry {
     // --- Watchdog RSS asli per akun ---
     pid_t web_process_pid = 0;     // PID WebKitWebProcess milik view ini, 0 = belum ketemu
     gint64 last_reload_unix = 0;   // waktu (detik) reload otomatis terakhir, untuk cooldown
+
+    // --- Backoff reload setelah WebProcess dibunuh WebKit sendiri ---
+    int consecutive_kills = 0;         // di-reset kalau sudah tenang > KILL_BACKOFF_RESET_WINDOW
+    gint64 last_kill_unix = 0;         // waktu (detik) kill terakhir, dasar perhitungan reset window
+    guint pending_reload_timeout_id = 0; // id g_timeout_add untuk reload yang ditunda, 0 = tidak ada
 };
 
 struct _WebkitMultiViewPlugin {
@@ -224,6 +302,39 @@ namespace {
         delete static_cast<TerminationCallbackData*>(data);
     }
 
+    // Data yang dibawa g_timeout_add untuk reload yang ditunda (backoff).
+    struct PendingReload {
+        WebkitMultiViewPlugin* self;
+        std::string view_id;
+    };
+
+    void CancelPendingReload(WebkitMultiViewPlugin* self, const std::string& view_id) {
+        auto git = self->geometry->find(view_id);
+        if (git != self->geometry->end() && git->second.pending_reload_timeout_id != 0) {
+            g_source_remove(git->second.pending_reload_timeout_id);
+            git->second.pending_reload_timeout_id = 0;
+        }
+    }
+
+    gboolean PendingReloadCallback(gpointer data) {
+        PendingReload* pending = static_cast<PendingReload*>(data);
+        WebkitMultiViewPlugin* self = pending->self;
+        auto vit = self->views->find(pending->view_id);
+        auto git = self->geometry->find(pending->view_id);
+        if (vit != self->views->end() && git != self->geometry->end()) {
+            ViewGeometry& geo = git->second;
+            geo.pending_reload_timeout_id = 0;
+            // Kalau view sempat disembunyikan (di-suspend) selagi menunggu
+            // backoff, jangan buru-buru muat ulang WhatsApp Web di
+            // background — sama seperti alasan di OnWebProcessTerminated.
+            if (!geo.suspended) {
+                webkit_web_view_load_uri(vit->second, geo.url.c_str());
+            }
+        }
+        delete pending;
+        return G_SOURCE_REMOVE;
+    }
+
     // Dipanggil WebKit saat WebProcess mati abnormal — termasuk saat WebKit
     // SENDIRI membunuhnya karena lewat WEB_PROCESS_KILL_THRESHOLD (lihat
     // OnWebProcessTerminated). Ini yang membuat batas RAM di atas benar-benar
@@ -240,15 +351,82 @@ namespace {
 
         if (reason == WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT ||
             reason == WEBKIT_WEB_PROCESS_CRASHED) {
+            // FIX (death spiral): sebelumnya baris di bawah ini langsung
+            // dipanggil tanpa jeda sama sekali, kill keberapa pun. Kalau
+            // sebuah akun memang konsisten lewat WEB_PROCESS_MEMORY_LIMIT_MB
+            // (bukan cuma sesekali), reload instan hanya mempercepat siklus
+            // "load penuh -> naik lagi -> kena limit lagi" — persis yang
+            // terlihat sebagai log kill berturut-turut dalam hitungan
+            // detik/menit. Sekarang kill yang beruntun (dalam jendela reset
+            // di bawah) ditunda makin lama tiap kali terjadi lagi, supaya
+            // WebProcess baru sempat "istirahat" alih-alih langsung
+            // dibebani penuh lagi.
+            gint64 now = static_cast<gint64>(g_get_real_time() / G_USEC_PER_SEC);
+            if (geo.last_kill_unix == 0 ||
+                now - geo.last_kill_unix > WEB_PROCESS_KILL_BACKOFF_RESET_WINDOW_SECONDS) {
+                geo.consecutive_kills = 0;
+            }
+            geo.consecutive_kills++;
+            geo.last_kill_unix = now;
+
+            int backoff_index = geo.consecutive_kills - 1;
+            if (backoff_index > WEB_PROCESS_KILL_BACKOFF_MAX_INDEX) {
+                backoff_index = WEB_PROCESS_KILL_BACKOFF_MAX_INDEX;
+            }
+            int delay_seconds = kWebProcessKillBackoffDelaysSeconds[backoff_index];
+
             // Proses lama sudah mati total — kalau view ini sedang disembunyikan
             // (suspended ke about:blank), biarkan saja, tidak perlu buru-buru
             // memuat ulang WhatsApp Web di background. Kalau sedang dipakai
-            // (tidak suspended), reconnect langsung supaya user tidak melihat
-            // halaman kosong.
+            // (tidak suspended), reconnect setelah jeda backoff di atas supaya
+            // user tidak melihat halaman kosong terlalu lama, tapi juga tidak
+            // langsung disusul kill berikutnya kalau akun ini memang berat.
+            CancelPendingReload(self, data->view_id);
+            if (!geo.suspended) {
+                if (delay_seconds <= 1) {
+                    webkit_web_view_load_uri(web_view, geo.url.c_str());
+                } else {
+                    PendingReload* pending = new PendingReload{self, data->view_id};
+                    geo.pending_reload_timeout_id =
+                        g_timeout_add_seconds(delay_seconds, PendingReloadCallback, pending);
+                }
+            }
+            // PID lama sudah tidak valid, watchdog /proc perlu mencari ulang.
+            if (geo.web_process_pid > 0) {
+                self->assigned_pids->erase(geo.web_process_pid);
+                geo.web_process_pid = 0;
+            }
+            PendingPidResolve* pending = new PendingPidResolve{self, data->view_id, 10};
+            g_timeout_add(300, ResolvePidCallback, pending);
+            return;
+        }
+
+        if (reason == WEBKIT_WEB_PROCESS_TERMINATED_BY_API) {
+            // FIX (log "... (967 MB) below the kill thresold (900 MB). Killed"
+            // masih muncul walau limit sudah dinaikkan): menaikkan limit
+            // terus-menerus tidak akan pernah selesai, karena pertumbuhannya
+            // bukan cache yang bisa dibuang WebKit lewat conservative/strict
+            // threshold (itu cuma untuk cache gambar/font) — ini heap JS yang
+            // masih dipegang referensi oleh WhatsApp Web sendiri selama
+            // dipakai aktif (media/blob, koneksi, dsb), dan webkit_web_view_
+            // reload() di proses YANG SAMA tidak selalu berhasil melepasnya
+            // balik ke OS (fragmentasi allocator, referensi yang belum
+            // sempat di-GC).
+            //
+            // MemoryWatchdogCallback sekarang memanggil
+            // webkit_web_view_terminate_web_process() alih-alih reload()
+            // untuk akun yang RSS-nya sudah tinggi — ini benar-benar
+            // menghentikan proses OS-nya (persis seperti suspend akun
+            // latar), lalu kita tangkap kematiannya di sini (reason ini)
+            // dan muat ulang di proses BARU yang bersih. Ini proaktif
+            // (dipicu sebelum WebKit sendiri sampai ke kill_threshold),
+            // jadi TIDAK dihitung sebagai "kill beruntun" di atas — itu
+            // backoff khusus untuk kill yang di luar kendali kita
+            // (EXCEEDED_MEMORY_LIMIT/CRASHED), bukan untuk recycle
+            // terjadwal yang memang kita minta sendiri.
             if (!geo.suspended) {
                 webkit_web_view_load_uri(web_view, geo.url.c_str());
             }
-            // PID lama sudah tidak valid, watchdog /proc perlu mencari ulang.
             if (geo.web_process_pid > 0) {
                 self->assigned_pids->erase(geo.web_process_pid);
                 geo.web_process_pid = 0;
@@ -284,8 +462,21 @@ namespace {
     }
 
     // Dipanggil tiap MEMORY_WATCHDOG_INTERVAL_SECONDS untuk semua view: baca
-    // VmRSS asli WebProcess-nya, dan kalau sudah lewat ambang, reload akun
-    // itu (bukan tebak-tebakan timer tetap seperti sebelumnya).
+    // VmRSS asli WebProcess-nya, dan kalau sudah lewat ambang, RECYCLE akun
+    // itu (hentikan proses lamanya sepenuhnya, bukan cuma navigasi ulang).
+    //
+    // FIX: sebelumnya baris ini memanggil webkit_web_view_reload(), yang
+    // menavigasi ulang di WebProcess yang SAMA. Itu cukup untuk mengosongkan
+    // DOM/JS heap kalau pertumbuhannya murni cache, tapi terbukti tidak
+    // cukup di lapangan (limit dinaikkan 600MB -> 900MB, tetap kena di
+    // 967MB) — pertumbuhannya termasuk sesuatu yang tidak dilepas balik ke
+    // OS hanya dengan navigasi ulang (fragmentasi allocator glibc, atau
+    // referensi yang perlu satu siklus GC penuh + proses baru untuk benar-
+    // benar hilang). webkit_web_view_terminate_web_process() di bawah
+    // benar-benar mengakhiri proses OS-nya — sama seperti yang sudah
+    // terbukti berhasil untuk suspend akun latar (about:blank) dan untuk
+    // HandleDestroy — lalu OnWebProcessTerminated (reason TERMINATED_BY_API)
+    // yang memuat ulang di proses BARU yang bersih.
     gboolean MemoryWatchdogCallback(gpointer data) {
         WebkitMultiViewPlugin* self = static_cast<WebkitMultiViewPlugin*>(data);
         gint64 now = static_cast<gint64>(g_get_real_time() / G_USEC_PER_SEC);
@@ -297,25 +488,61 @@ namespace {
             if (git == self->geometry->end()) continue;
             ViewGeometry& geo = git->second;
 
-            if (geo.suspended || geo.web_process_pid <= 0) continue;
+            if (geo.suspended) continue;
+
+            // FIX (log kill terus muncul walau threshold sudah diturunkan
+            // & poll dipercepat — kill berikutnya di 976MB): akar masalah
+            // di sini ternyata bukan kecepatan watchdog, tapi watchdog
+            // TIDAK PERNAH mendapat PID akun ini sama sekali. Rantai
+            // ResolvePidCallback (dipicu dari HandleCreate & dari
+            // OnWebProcessTerminated) hanya mencoba selama ~3 detik (10x,
+            // 300ms) lalu MENYERAH PERMANEN kalau belum ketemu —
+            // web_process_pid tetap 0 selamanya, dan baris `continue` di
+            // bawah membuat akun itu tidak pernah dipantau lagi oleh kita.
+            // Ini gampang terjadi justru saat sistem sedang tertekan
+            // memori (spawn proses baru jadi lebih lambat dari 3 detik),
+            // yaitu tepat saat pemantauan ini paling dibutuhkan.
+            //
+            // Sekarang watchdog ini sendiri juga mencoba resolve PID yang
+            // masih 0 di SETIAP tick (tiap MEMORY_WATCHDOG_INTERVAL_SECONDS
+            // = 8 detik), bukan cuma mengandalkan rantai awal yang bisa
+            // habis masa percobaannya. Ini membuat resolusi PID "self-
+            // healing" — selama view-nya masih hidup, cepat atau lambat
+            // akan tertangkap di sini walau rantai awalnya gagal.
+            if (geo.web_process_pid <= 0) {
+                pid_t pid = FindUnclaimedWebProcessPid(self->assigned_pids);
+                if (pid > 0) {
+                    geo.web_process_pid = pid;
+                    self->assigned_pids->insert(pid);
+                }
+                // Baik dapat maupun belum, lewati RSS check tick ini —
+                // kalau baru dapat, angkanya belum representatif; kalau
+                // belum dapat, memang belum ada yang bisa dibaca.
+                continue;
+            }
+
             if (webkit_web_view_is_loading(view)) continue;
             if (now - geo.last_reload_unix < MEMORY_RELOAD_COOLDOWN_SECONDS) continue;
 
             long rss_kb = ReadProcRssKb(geo.web_process_pid);
             if (rss_kb < 0) {
                 // PID sudah tidak ada (proses ganti karena reload/crash) —
-                // lepaskan supaya ResolvePidCallback berikutnya bisa dipanggil
-                // ulang lewat create/reload.
+                // lepaskan supaya blok resolve di atas bisa mencari ulang
+                // pada tick berikutnya.
                 self->assigned_pids->erase(geo.web_process_pid);
                 geo.web_process_pid = 0;
                 continue;
             }
             if (static_cast<gint64>(rss_kb) * 1024 >= MEMORY_RELOAD_THRESHOLD_BYTES) {
-                // webkit_web_view_reload() menavigasi ulang di WebProcess yang
-                // SAMA (bukan proses baru), jadi pid yang sudah kita catat
-                // tetap valid — cukup catat waktu reload untuk cooldown.
-                webkit_web_view_reload(view);
+                // Catat waktu SEKARANG untuk cooldown, sebelum memanggil
+                // terminate — sinyal "web-process-terminated" (yang memuat
+                // ulang & mereset web_process_pid) baru datang belakangan
+                // lewat main loop, jadi cooldown harus sudah aktif dari
+                // titik ini supaya iterasi watchdog berikutnya (yang bisa
+                // saja jalan sebelum sinyal itu tiba) tidak mencoba
+                // men-terminate proses yang sama dua kali.
                 geo.last_reload_unix = now;
+                webkit_web_view_terminate_web_process(view);
             }
         }
         return G_SOURCE_CONTINUE;
@@ -326,6 +553,7 @@ namespace {
 static FlMethodResponse* HandleDestroy(WebkitMultiViewPlugin* self, FlValue* args) {
     const std::string view_id = GetString(args, "viewId");
     CancelPendingSuspend(self, view_id);
+    CancelPendingReload(self, view_id);
     auto it = self->views->find(view_id);
     if (it != self->views->end()) {
         WebKitWebView* webview = it->second;
@@ -369,9 +597,23 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
     // sama-sama tidak error/warning kalau salah pakai.
     WebKitMemoryPressureSettings* mem_settings = webkit_memory_pressure_settings_new();
     webkit_memory_pressure_settings_set_memory_limit(mem_settings, WEB_PROCESS_MEMORY_LIMIT_MB);
-    webkit_memory_pressure_settings_set_conservative_threshold(mem_settings, WEB_PROCESS_CONSERVATIVE_THRESHOLD);
-    webkit_memory_pressure_settings_set_strict_threshold(mem_settings, WEB_PROCESS_STRICT_THRESHOLD);
+    // PENTING: urutan setter di bawah ini tidak boleh diubah bebas.
+    // Tiap setter memvalidasi nilainya terhadap nilai threshold tetangga
+    // yang TERSIMPAN SAAT ITU (bukan nilai akhir yang akan kita pasang),
+    // yaitu kira-kira:
+    //   conservative harus <  strict (yang sudah tersimpan)
+    //   strict        harus >  conservative (yang sudah tersimpan) dan < kill (yang sudah tersimpan)
+    //   kill          harus >  strict (yang sudah tersimpan)
+    // Default internal WebKit untuk strict/kill cukup rendah, jadi kalau
+    // conservative (0.5) dipasang duluan -- SEBELUM strict dinaikkan --
+    // assertion "value < settings->configuration.strictThresholdFraction"
+    // langsung gagal dan proses abort (persis CRITICAL yang muncul di log).
+    // Solusinya: pasang dari batas paling tinggi ke paling rendah (kill ->
+    // strict -> conservative) supaya setiap perbandingan selalu terhadap
+    // nilai yang SUDAH benar, bukan default bawaan.
     webkit_memory_pressure_settings_set_kill_threshold(mem_settings, WEB_PROCESS_KILL_THRESHOLD);
+    webkit_memory_pressure_settings_set_strict_threshold(mem_settings, WEB_PROCESS_STRICT_THRESHOLD);
+    webkit_memory_pressure_settings_set_conservative_threshold(mem_settings, WEB_PROCESS_CONSERVATIVE_THRESHOLD);
     webkit_memory_pressure_settings_set_poll_interval(mem_settings, WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS);
 
     WebKitWebsiteDataManager* data_manager = webkit_website_data_manager_new(
@@ -400,7 +642,12 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
     WebKitSettings* webkit_settings = webkit_web_view_get_settings(webview);
 
     webkit_settings_set_enable_javascript(webkit_settings, TRUE);
-    g_object_set(G_OBJECT(webkit_settings), "enable-javascript-jit", TRUE, NULL);
+    // NOTE: "enable-javascript-jit" BUKAN properti WebKitSettings yang
+    // valid pada WebKitGTK -- tidak pernah ada properti dengan nama ini.
+    // g_object_set di atas hanya memicu GLib-GObject-CRITICAL
+    // ("has no property named 'enable-javascript-jit'") dan tidak
+    // melakukan apa pun; JIT JavaScriptCore sudah aktif secara default.
+    // Dihapus.
 
     // PENTING: ON_DEMAND, bukan NEVER. NEVER memaksa software compositing,
     // yang justru menyimpan semua layer/surface di RAM sistem (bukan VRAM),
