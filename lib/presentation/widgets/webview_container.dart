@@ -106,11 +106,6 @@ class _WindowsEngineSurfaceState extends State<_WindowsEngineSurface>
   ModalRoute<void>? _subscribedRoute;
 
   @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final route = ModalRoute.of(context);
