@@ -154,8 +154,17 @@ MyApplication* my_application_new() {
   // 2. Batasi cache internal library font (fontconfig) yang sering bengkak di WA Web
   g_setenv("FONTCONFIG_PATH", "/etc/fonts", TRUE); 
 
-  // 3. Batasi proses network agar tidak membuat cache RAM (buffer media) berlebih
-  g_setenv("WEBKIT_FORCE_SANDBOX", "0", TRUE); // Membantu NetworkProcess tetap ringan
+  // 3. FIX: "WEBKIT_FORCE_SANDBOX=0" (versi sebelumnya) sudah TIDAK
+  // berfungsi lagi di WebKitGTK versi ini — env var itu di-deprecate dan
+  // sekarang cuma memicu warning di log ("WEBKIT_FORCE_SANDBOX no longer
+  // allows disabling the sandbox"), tanpa efek apa pun terhadap
+  // pemakaian RAM NetworkProcess (tujuan awalnya). Alternatifnya,
+  // WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1, sengaja TIDAK dipakai di
+  // sini — sesuai namanya, itu benar-benar mematikan sandbox proses web
+  // (risiko keamanan nyata: proses yang me-render halaman web tak
+  // dipercaya jadi tidak terisolasi dari sistem), dan sandbox bukan
+  // penyebab RAM boros di aplikasi ini — baris ini dihapus, sandbox
+  // WebKit tetap AKTIF (perilaku default & aman).
   
   // 4. Memory pressure (Jangan terlalu kecil agar tidak refresh, jangan terlalu besar agar tidak boros)
   g_setenv("WEBKIT_MEMORY_PRESSURE_SETTINGS", "512,1024", TRUE); 

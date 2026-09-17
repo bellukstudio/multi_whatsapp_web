@@ -28,39 +28,88 @@
 // RSS naik cepat (chat berat/banyak media), gampang melompat dari di
 // bawah ambang recycle kita ke atas kill_threshold WebKit DALAM SATU
 // jendela 60 detik itu — kita belum sempat cek, WebKit sudah lebih dulu
-// membunuhnya sendiri. Diturunkan ke 8 detik supaya watchdog kita selalu
-// dapat giliran cek lebih dulu daripada WebKit.
-#define MEMORY_WATCHDOG_INTERVAL_SECONDS 8
+// membunuhnya sendiri.
+//
+// FIX #2 (kill WebKit "(918 MB) below the kill thresold (900 MB)" masih
+// muncul walau interval sudah 8 detik): 8 detik masih cukup lebar untuk
+// kalah balapan lawan poll internal WebKit (10 detik) kalau RSS naik
+// sangat cepat (voice/video call, banyak media besar berurutan) DAN
+// kebetulan tick kita baru saja lewat saat lonjakan terjadi — dalam kasus
+// terburuk itu berarti hampir 8 detik penuh WebKit "unggul duluan".
+// Diturunkan lagi supaya jaring pengaman dari luar ini nyaris selalu
+// dapat giliran cek sebelum WebKit sempat menghitung 900MB-nya sendiri.
+#define MEMORY_WATCHDOG_INTERVAL_SECONDS 5
 
 // Ambang RSS per akun (WebProcess) yang memicu recycle proaktif dari SISI
 // LUAR (via /proc, dicek tiap MEMORY_WATCHDOG_INTERVAL_SECONDS = 8 detik
 // — sengaja lebih cepat daripada WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS
 // di bawah, supaya jaring pengaman ini yang menang duluan, bukan WebKit).
 //
-// Dipasang JAUH di bawah WEB_PROCESS_MEMORY_LIMIT_MB (bukan sedikit di
-// bawah seperti sebelumnya) supaya jaring pengaman ini sempat menangani
-// lonjakan
-// RSS lebih dulu lewat webkit_web_view_reload() (proses yang SAMA, lebih
-// murah) sebelum WebKit sendiri sampai ke kill_threshold dan membunuh
-// prosesnya. Kalau nilainya sama persis seperti sebelumnya, keduanya
-// balapan menuju garis finish yang sama dan yang menang hampir selalu sisi
-// internal WebKit (poll tiap 10 detik vs /proc tiap 60 detik).
-#define MEMORY_RELOAD_THRESHOLD_BYTES (650LL * 1024 * 1024)
+// FIX (webview "restart sendiri" terus-menerus, walau WEB_PROCESS_
+// MEMORY_LIMIT_MB / kill_threshold WebKit sudah diperbaiki di atas):
+// nilai sebelumnya (650MB) masih PERSIS di DALAM rentang pemakaian
+// NORMAL WhatsApp Web sendiri (500-800MB, chat besar/media terbuka —
+// lihat komentar WEB_PROCESS_MEMORY_LIMIT_MB di bawah). Artinya ambang
+// recycle proaktif INI SENDIRI kena bug yang sama persis yang sudah
+// diperbaiki untuk kill_threshold WebKit: hampir setiap akun yang
+// dipakai wajar cepat atau lambat melewati 650MB, memicu
+// webkit_web_view_terminate_web_process() -> OnWebProcessTerminated
+// (reason TERMINATED_BY_API) -> reload LANGSUNG tanpa backoff sama
+// sekali (lihat blok TERMINATED_BY_API di OnWebProcessTerminated — tidak
+// seperti blok EXCEEDED_MEMORY_LIMIT/CRASHED, blok ini sebelumnya tidak
+// memakai kWebProcessKillBackoffDelaysSeconds). Karena cooldown-nya cuma
+// 20 detik, begitu WebProcess baru kembali ke pemakaian normalnya
+// (>650MB lagi dalam hitungan puluhan detik saat chat aktif), watchdog
+// men-terminate lagi — inilah yang terlihat dari luar sebagai
+// "webview restart sendiri terus".
+//
+// Dinaikkan ke atas rentang pemakaian normal (bukan di tengahnya),
+// selaras dengan filosofi yang sama seperti WEB_PROCESS_MEMORY_LIMIT_MB:
+// ambang ini sekarang jadi jaring pengaman untuk pertumbuhan RSS yang
+// TIDAK WAJAR (leak/anomali), bukan trigger yang pasti kena di pemakaian
+// sehari-hari.
+//
+// FIX (kill WebKit "(918 MB) below the kill thresold (900 MB)" masih
+// terjadi walau ambang ini sempat dinaikkan ke 850MB): jarak 850MB ->
+// 900MB (hard kill) cuma 50MB — terlalu tipis. Kombinasi dengan
+// MEMORY_RELOAD_COOLDOWN_SECONDS yang sempat dinaikkan jauh (lihat
+// perbaikan di bawah) membuat ada jendela waktu watchdog kita SAMA
+// SEKALI TIDAK memeriksa RSS akun yang baru saja di-recycle — kalau akun
+// itu langsung dipakai berat lagi (panggilan video, kirim banyak media)
+// dalam jendela itu, RSS-nya bisa tembus 900MB tanpa sempat kita
+// tangkap, dan WebKit sendiri yang membunuhnya duluan. Diturunkan ke
+// 780MB supaya marginnya ke hard-kill (900MB) jadi 120MB — jauh lebih
+// longgar untuk poll 5 detik di atas menangkapnya lebih dulu.
+#define MEMORY_RELOAD_THRESHOLD_BYTES (780LL * 1024 * 1024)
 
 // Jangan recycle akun yang sama dua kali dalam jendela waktu ini, supaya
 // tidak terjadi recycle berulang selagi proses lama masih benar-benar
 // exit dan proses baru masih resolve PID-nya (lihat ResolvePidCallback).
 //
-// FIX: nilai sebelumnya (300 detik / 5 menit) berarti begitu satu akun
-// di-recycle, akun itu TIDAK dipantau sama sekali selama 5 menit
-// berikutnya (lihat `continue` di MemoryWatchdogCallback). Kalau proses
-// barunya tumbuh cepat lagi (dipakai berat terus-menerus), dia bisa lewat
-// WEB_PROCESS_MEMORY_LIMIT_MB dan kena kill WebKit tanpa sempat kita
-// tangani proaktif sama sekali — persis pola kill berulang yang masih
-// terlihat. Diturunkan jauh, cukup untuk membiarkan proses lama benar-
-// benar exit dan PID baru ter-resolve (~beberapa detik), bukan untuk
-// mencegah pemantauan RSS berikutnya.
-#define MEMORY_RELOAD_COOLDOWN_SECONDS 20
+// FIX (webview "restart sendiri" - versi lama, 20 detik): dinaikkan ke 90
+// detik untuk mencegah loop reload rapat.
+//
+// FIX LAGI (kill WebKit "918 MB ... Killed" muncul SETELAH fix di atas):
+// 90 detik ternyata salah alat untuk masalah "restart terus" — nilai itu
+// membuat watchdog BERHENTI TOTAL memantau RSS akun ini selama 90 detik
+// penuh setiap kali kita baru saja me-recycle-nya (lihat `continue` di
+// bawah), termasuk kalau proses barunya langsung dibebani berat lagi.
+// Itu justru membuka celah: RSS boleh naik bebas tanpa pengawasan kita
+// selama 90 detik, dan WebKit sendiri (poll independen, 10 detik) yang
+// akhirnya menangkap & membunuhnya lebih dulu begitu lewat 900MB — persis
+// yang terlihat di log.
+//
+// Perlindungan anti-loop yang SEBENARNYA sudah ada di tempat lain:
+// backoff bertingkat (kWebProcessKillBackoffDelaysSeconds, dipakai baik
+// untuk kill di luar kendali kita maupun recycle proaktif kita sendiri —
+// lihat OnWebProcessTerminated) menunda RELOAD SETELAH terminate, makin
+// lama kalau terjadi berulang. Cooldown di sini cuma perlu cukup untuk
+// mencegah kita memanggil terminate_web_process() dua kali pada proses
+// yang sama sebelum sinyal "web-process-terminated"-nya benar-benar
+// tiba (biasanya kurang dari satu detik, beri jarak aman beberapa detik
+// saja) — bukan untuk menahan pemantauan RSS dalam waktu lama.
+// Dikembalikan ke nilai pendek.
+#define MEMORY_RELOAD_COOLDOWN_SECONDS 15
 
 // --- Hard cap asli WebKit, per WebProcess ---
 // Ini pagar utama untuk menekan total RAM. WebKit punya monitor memori
@@ -302,6 +351,115 @@ namespace {
         delete static_cast<TerminationCallbackData*>(data);
     }
 
+    // --- Drag & drop file dari luar aplikasi (mis. file manager) ke atas
+    // sebuah WebKitWebView ---
+    //
+    // FIX (drag & drop tidak berjalan sama sekali di Linux): setiap
+    // WebKitWebView di sini adalah widget GTK NATIVE yang diletakkan
+    // langsung di atas FlView lewat GtkFixed di dalam GtkOverlay (lihat
+    // my_application.cc) — BUKAN Flutter texture/platform-view yang ikut
+    // masuk ke render tree Flutter seperti webview_windows di Windows.
+    // Akibatnya seluruh event drag-and-drop level GTK/X11-Wayland yang
+    // terjadi persis di atas area webview jatuh ke widget native ini
+    // duluan; plugin desktop_drop (dipakai lewat DropTarget di Dart, lihat
+    // webview_container.dart) mendaftarkan drag-dest-nya sendiri di FlView
+    // / window Flutter, yang di area itu SUDAH TERTUTUP widget native ini
+    // dan tidak pernah menerima apa pun. Ini kenapa DropTarget di Windows
+    // ( _WindowsEngineSurface ) bekerja tapi padanannya tidak pernah
+    // dipasang sama sekali untuk _LinuxEngineSurface — dipasang pun tidak
+    // akan menerima event.
+    //
+    // Solusinya: daftarkan drag-dest GTK langsung pada widget WebKitWebView
+    // itu sendiri (di HandleCreate), lalu saat file benar-benar di-drop,
+    // teruskan daftar path file-nya ke Dart lewat method channel yang sama
+    // ("filesDropped"), supaya alur upload berbasis JS injection yang sudah
+    // ada (lihat file_drop_injection.dart, sudah dipakai untuk Windows)
+    // bisa dipakai ulang persis sama di Linux.
+    struct DropCallbackData {
+        WebkitMultiViewPlugin* self;
+        std::string view_id;
+    };
+
+    void FreeDropData(gpointer data, GClosure*) {
+        delete static_cast<DropCallbackData*>(data);
+    }
+
+    void InvokeMethodIgnoreResponse(FlMethodChannel* channel, const char* method, FlValue* args) {
+        fl_method_channel_invoke_method(channel, method, args, nullptr, nullptr, nullptr);
+    }
+
+    // Dipanggil GTK setelah gtk_drag_get_data() (lihat OnDragDrop di bawah)
+    // selesai mengambil data drop dalam format "text/uri-list".
+    void OnDragDataReceived(GtkWidget*, GdkDragContext* context, gint, gint,
+                             GtkSelectionData* selection_data, guint, guint time,
+                             gpointer user_data) {
+        DropCallbackData* data = static_cast<DropCallbackData*>(user_data);
+
+        gchar** uris = gtk_selection_data_get_uris(selection_data);
+        bool ok = uris != nullptr;
+        if (uris != nullptr) {
+            g_autoptr(FlValue) paths = fl_value_new_list();
+            for (int i = 0; uris[i] != nullptr; i++) {
+                // "file:///home/user/foto.jpg" -> "/home/user/foto.jpg".
+                // Drop dari sumber non-file (mis. link dari browser lain)
+                // menghasilkan nullptr di sini dan cukup dilewati.
+                g_autoptr(GError) error = nullptr;
+                gchar* path = g_filename_from_uri(uris[i], nullptr, &error);
+                if (path != nullptr) {
+                    fl_value_append_take(paths, fl_value_new_string(path));
+                    g_free(path);
+                }
+            }
+            g_strfreev(uris);
+
+            if (fl_value_get_length(paths) > 0) {
+                g_autoptr(FlValue) args = fl_value_new_map();
+                fl_value_set_string_take(args, "viewId", fl_value_new_string(data->view_id.c_str()));
+                fl_value_set_string_take(args, "paths", fl_value_ref(paths));
+                InvokeMethodIgnoreResponse(data->self->channel, "filesDropped", args);
+            }
+        }
+        gtk_drag_finish(context, ok, FALSE, time);
+    }
+
+    // GTK_DEST_DEFAULT_DROP sengaja TIDAK dipakai di gtk_drag_dest_set
+    // (lihat HandleCreate) supaya kita yang eksplisit memutuskan target
+    // mana yang diminta dan eksplisit memanggil gtk_drag_finish() persis
+    // sekali di OnDragDataReceived, tanpa bergantung pada perilaku
+    // "otomatis" GTK yang berbeda-beda antar versi.
+    gboolean OnDragDrop(GtkWidget* widget, GdkDragContext* context, gint, gint, guint time, gpointer) {
+        GdkAtom target = gtk_drag_dest_find_target(widget, context, nullptr);
+        if (target == GDK_NONE) {
+            gtk_drag_finish(context, FALSE, FALSE, time);
+            return TRUE;
+        }
+        gtk_drag_get_data(widget, context, target, time);
+        return TRUE;
+    }
+
+    // "dragEntered"/"dragExited" diteruskan ke Dart supaya _LinuxEngineSurface
+    // bisa menampilkan overlay hover yang sama seperti versi Windows
+    // (_WindowsEngineSurface, lihat _dragging di webview_container.dart).
+    // "dragEntered" dikirim di tiap tick drag-motion (murah & idempotent —
+    // sisi Dart cuma set bool ke true), bukan cuma sekali di awal, supaya
+    // tidak perlu state tambahan di sisi native untuk melacak "sudah pernah
+    // masuk atau belum" per sesi drag.
+    gboolean OnDragMotion(GtkWidget*, GdkDragContext* context, gint, gint, guint time, gpointer user_data) {
+        gdk_drag_status(context, GDK_ACTION_COPY, time);
+        DropCallbackData* data = static_cast<DropCallbackData*>(user_data);
+        g_autoptr(FlValue) args = fl_value_new_map();
+        fl_value_set_string_take(args, "viewId", fl_value_new_string(data->view_id.c_str()));
+        InvokeMethodIgnoreResponse(data->self->channel, "dragEntered", args);
+        return TRUE;
+    }
+
+    void OnDragLeave(GtkWidget*, GdkDragContext*, guint, gpointer user_data) {
+        DropCallbackData* data = static_cast<DropCallbackData*>(user_data);
+        g_autoptr(FlValue) args = fl_value_new_map();
+        fl_value_set_string_take(args, "viewId", fl_value_new_string(data->view_id.c_str()));
+        InvokeMethodIgnoreResponse(data->self->channel, "dragExited", args);
+    }
+
     // Data yang dibawa g_timeout_add untuk reload yang ditunda (backoff).
     struct PendingReload {
         WebkitMultiViewPlugin* self;
@@ -402,30 +560,52 @@ namespace {
         }
 
         if (reason == WEBKIT_WEB_PROCESS_TERMINATED_BY_API) {
-            // FIX (log "... (967 MB) below the kill thresold (900 MB). Killed"
-            // masih muncul walau limit sudah dinaikkan): menaikkan limit
-            // terus-menerus tidak akan pernah selesai, karena pertumbuhannya
-            // bukan cache yang bisa dibuang WebKit lewat conservative/strict
-            // threshold (itu cuma untuk cache gambar/font) — ini heap JS yang
-            // masih dipegang referensi oleh WhatsApp Web sendiri selama
-            // dipakai aktif (media/blob, koneksi, dsb), dan webkit_web_view_
-            // reload() di proses YANG SAMA tidak selalu berhasil melepasnya
-            // balik ke OS (fragmentasi allocator, referensi yang belum
-            // sempat di-GC).
+            // FIX (death spiral bagian ketiga — "webview restart sendiri
+            // terus" masih terjadi walau backoff sudah ada di atas untuk
+            // EXCEEDED_MEMORY_LIMIT/CRASHED): recycle proaktif kita sendiri
+            // (MemoryWatchdogCallback memanggil webkit_web_view_
+            // terminate_web_process() saat RSS lewat
+            // MEMORY_RELOAD_THRESHOLD_BYTES) berakhir di SINI dengan reason
+            // TERMINATED_BY_API. Baris di bawah SEBELUMNYA langsung
+            // webkit_web_view_load_uri() tanpa jeda sama sekali, kill
+            // keberapa pun — persis pola yang sama yang menyebabkan death
+            // spiral EXCEEDED_MEMORY_LIMIT/CRASHED (lihat blok di atas),
+            // hanya lewat jalur yang berbeda (kita men-terminate diri
+            // sendiri, bukan WebKit). Kalau MEMORY_RELOAD_THRESHOLD_BYTES
+            // tercapai lagi dengan cepat (akun memang dipakai berat terus-
+            // menerus), reload instan berulang inilah yang membuat webview
+            // terlihat "restart sendiri" tanpa henti dari luar.
             //
-            // MemoryWatchdogCallback sekarang memanggil
-            // webkit_web_view_terminate_web_process() alih-alih reload()
-            // untuk akun yang RSS-nya sudah tinggi — ini benar-benar
-            // menghentikan proses OS-nya (persis seperti suspend akun
-            // latar), lalu kita tangkap kematiannya di sini (reason ini)
-            // dan muat ulang di proses BARU yang bersih. Ini proaktif
-            // (dipicu sebelum WebKit sendiri sampai ke kill_threshold),
-            // jadi TIDAK dihitung sebagai "kill beruntun" di atas — itu
-            // backoff khusus untuk kill yang di luar kendali kita
-            // (EXCEEDED_MEMORY_LIMIT/CRASHED), bukan untuk recycle
-            // terjadwal yang memang kita minta sendiri.
+            // Sekarang jalur ini memakai hitungan "kill beruntun" yang SAMA
+            // dengan blok EXCEEDED_MEMORY_LIMIT/CRASHED di atas (bukan
+            // hitungan terpisah) — recycle proaktif dan kill di luar kendali
+            // kita sama-sama berkontribusi ke satu penanda "akun ini sedang
+            // berat", dan sama-sama kena backoff makin lama kalau terjadi
+            // berulang dalam jendela waktu WEB_PROCESS_KILL_BACKOFF_RESET_
+            // WINDOW_SECONDS ini.
+            gint64 now = static_cast<gint64>(g_get_real_time() / G_USEC_PER_SEC);
+            if (geo.last_kill_unix == 0 ||
+                now - geo.last_kill_unix > WEB_PROCESS_KILL_BACKOFF_RESET_WINDOW_SECONDS) {
+                geo.consecutive_kills = 0;
+            }
+            geo.consecutive_kills++;
+            geo.last_kill_unix = now;
+
+            int backoff_index = geo.consecutive_kills - 1;
+            if (backoff_index > WEB_PROCESS_KILL_BACKOFF_MAX_INDEX) {
+                backoff_index = WEB_PROCESS_KILL_BACKOFF_MAX_INDEX;
+            }
+            int delay_seconds = kWebProcessKillBackoffDelaysSeconds[backoff_index];
+
+            CancelPendingReload(self, data->view_id);
             if (!geo.suspended) {
-                webkit_web_view_load_uri(web_view, geo.url.c_str());
+                if (delay_seconds <= 1) {
+                    webkit_web_view_load_uri(web_view, geo.url.c_str());
+                } else {
+                    PendingReload* pending = new PendingReload{self, data->view_id};
+                    geo.pending_reload_timeout_id =
+                        g_timeout_add_seconds(delay_seconds, PendingReloadCallback, pending);
+                }
             }
             if (geo.web_process_pid > 0) {
                 self->assigned_pids->erase(geo.web_process_pid);
@@ -680,6 +860,32 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
                            G_CALLBACK(OnWebProcessTerminated), term_data,
                            FreeTerminationData, static_cast<GConnectFlags>(0));
 
+    // Daftarkan widget ini sebagai drag-dest supaya file yang di-drag dari
+    // luar aplikasi (file manager, dsb.) bisa ditangkap dan diteruskan ke
+    // Dart (lihat DropCallbackData & OnDragDataReceived di atas untuk
+    // alasan kenapa ini perlu ditangani manual, bukan lewat DropTarget
+    // Flutter). GTK_DEST_DEFAULT_MOTION | HIGHLIGHT saja (bukan DROP) —
+    // sinyal "drag-drop" ditangani manual lewat OnDragDrop di bawah.
+    static GtkTargetEntry kDropTargets[] = {
+        {const_cast<gchar*>("text/uri-list"), 0, 0},
+    };
+    gtk_drag_dest_set(webview_widget,
+                       static_cast<GtkDestDefaults>(GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_HIGHLIGHT),
+                       kDropTargets, 1, GDK_ACTION_COPY);
+    DropCallbackData* drop_data = new DropCallbackData{self, view_id};
+    g_signal_connect_data(webview_widget, "drag-drop", G_CALLBACK(OnDragDrop),
+                           drop_data, nullptr, static_cast<GConnectFlags>(0));
+    g_signal_connect_data(webview_widget, "drag-motion", G_CALLBACK(OnDragMotion),
+                           drop_data, nullptr, static_cast<GConnectFlags>(0));
+    g_signal_connect_data(webview_widget, "drag-leave", G_CALLBACK(OnDragLeave),
+                           drop_data, nullptr, static_cast<GConnectFlags>(0));
+    // Hanya SATU dari koneksi sinyal drop_data ini yang perlu punya
+    // destroy-notify (di-free tepat sekali saat widget dihancurkan) —
+    // dipasang di sini karena "drag-data-received" adalah yang paling
+    // sering benar-benar dipakai.
+    g_signal_connect_data(webview_widget, "drag-data-received", G_CALLBACK(OnDragDataReceived),
+                           drop_data, FreeDropData, static_cast<GConnectFlags>(0));
+
     (*self->views)[view_id] = webview;
     ViewGeometry geo{};
     geo.url = url;
@@ -782,29 +988,70 @@ static FlMethodResponse* HandleReload(WebkitMultiViewPlugin* self, FlValue* args
 
 // Injects arbitrary JS into the loaded page — used by the chat-privacy
 // blur feature (see chat_blur_css.dart on the Dart side) to install a
-// <style> tag. Fire-and-forget: we pass a null GAsyncReadyCallback
-// because none of our current callers need a result back, only the
-// side effect. If a future caller needs the JS's return value, add a
-// callback here that reads it via webkit_web_view_run_javascript_finish
-// and forwards it through an FlMethodResponse instead of returning
-// immediately below.
-// SESUDAH:
-static FlMethodResponse* HandleRunJavaScript(WebkitMultiViewPlugin* self, FlValue* args) {
+// <style> tag, AND (FIX, see below) by the Linux drag-and-drop file-attach
+// flow (webview_container.dart / file_drop_injection.dart), which needs
+// the script's *return value* to decide what to do next (e.g. did the
+// "Document" menu item actually get found and clicked, at which DOM index
+// is the target <input type="file">).
+//
+// SEBELUMNYA: fire-and-forget dengan callback nullptr, jadi respons method
+// channel ini SELALU null — cukup untuk chat-blur (cuma butuh efek
+// sampingnya), tapi berarti alur drop yang butuh hasil skrip (dipakai
+// sudah lebih dulu untuk Windows lewat webview_windows'
+// controller.executeScript, yang memang mengembalikan hasil) tidak bisa
+// jalan sama sekali di Linux — selalu mendapat null dan langsung dianggap
+// gagal di setiap langkah.
+//
+// SEKARANG: async lewat webkit_web_view_evaluate_javascript_finish(),
+// hasilnya diserialisasi ke JSON (jsc_value_to_json) dan dikembalikan
+// sebagai string lewat method channel; sisi Dart men-decode JSON itu
+// sendiri (lihat runJavaScript di linux_webkit_platform_view.dart), meniru
+// persis bentuk nilai balik (Map/num/bool/null) yang sudah dipakai untuk
+// Windows.
+namespace {
+    void OnJsEvalFinished(GObject* source, GAsyncResult* result, gpointer user_data) {
+        FlMethodCall* method_call = FL_METHOD_CALL(user_data);
+        WebKitWebView* view = WEBKIT_WEB_VIEW(source);
+
+        g_autoptr(GError) error = nullptr;
+        JSCValue* value = webkit_web_view_evaluate_javascript_finish(view, result, &error);
+
+        g_autoptr(FlValue) result_value = nullptr;
+        if (error != nullptr || value == nullptr) {
+            result_value = fl_value_new_null();
+        } else {
+            g_autofree gchar* json = jsc_value_to_json(value, 0);
+            result_value = json != nullptr ? fl_value_new_string(json) : fl_value_new_null();
+        }
+        if (value != nullptr) g_object_unref(value);
+
+        g_autoptr(FlMethodResponse) response =
+            FL_METHOD_RESPONSE(fl_method_success_response_new(result_value));
+        fl_method_call_respond(method_call, response, nullptr);
+        g_object_unref(method_call);
+    }
+}
+
+static void HandleRunJavaScriptAsync(WebkitMultiViewPlugin* self, FlMethodCall* method_call) {
+    FlValue* args = fl_method_call_get_args(method_call);
     const std::string view_id = GetString(args, "viewId");
     const std::string script = GetString(args, "script");
     auto it = self->views->find(view_id);
-    if (it != self->views->end() && !script.empty()) {
-        webkit_web_view_evaluate_javascript(
-            it->second,
-            script.c_str(),
-            -1,        // length: -1 = script null-terminated, WebKit hitung sendiri panjangnya
-            nullptr,   // world_name: nullptr = default world (sama seperti run_javascript lama)
-            nullptr,   // source_uri: tidak relevan untuk kita, aman nullptr
-            nullptr,   // cancellable: sama seperti sebelumnya, tidak dipakai
-            nullptr,   // callback: fire-and-forget, kita tidak butuh hasilnya
-            nullptr);  // user_data
+    if (it == self->views->end() || script.empty()) {
+        g_autoptr(FlMethodResponse) response =
+            FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_null()));
+        fl_method_call_respond(method_call, response, nullptr);
+        return;
     }
-    return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    webkit_web_view_evaluate_javascript(
+        it->second,
+        script.c_str(),
+        -1,        // length: -1 = script null-terminated, WebKit hitung sendiri panjangnya
+        nullptr,   // world_name: nullptr = default world
+        nullptr,   // source_uri: tidak relevan untuk kita, aman nullptr
+        nullptr,   // cancellable
+        OnJsEvalFinished,
+        g_object_ref(method_call));  // dilepas lagi di OnJsEvalFinished
 }
 
 // --- BOILERPLATE INFRASTRUCTURE ---
@@ -813,6 +1060,17 @@ static void MethodCallCb(FlMethodChannel* channel, FlMethodCall* method_call, gp
     WebkitMultiViewPlugin* self = WEBKIT_MULTI_VIEW_PLUGIN(user_data);
     const gchar* method = fl_method_call_get_name(method_call);
     FlValue* args = fl_method_call_get_args(method_call);
+
+    // "runJavaScript" merespons secara ASYNC (lihat HandleRunJavaScriptAsync
+    // / OnJsEvalFinished) sekarang supaya bisa mengembalikan hasil evaluasi
+    // JS yang sesungguhnya, bukan langsung null seperti sebelumnya — jadi
+    // sengaja di-return lebih awal di sini, TIDAK ikut fl_method_call_respond
+    // di bawah (kalau ikut, method call ini akan direspons dua kali, yang
+    // menyebabkan CRITICAL dari flutter_linux).
+    if (g_strcmp0(method, "runJavaScript") == 0) {
+        HandleRunJavaScriptAsync(self, method_call);
+        return;
+    }
 
     g_autoptr(FlMethodResponse) response = nullptr;
     if (g_strcmp0(method, "create") == 0) {
@@ -823,8 +1081,6 @@ static void MethodCallCb(FlMethodChannel* channel, FlMethodCall* method_call, gp
         response = HandleSetVisible(self, args);
     } else if (g_strcmp0(method, "reload") == 0) {
         response = HandleReload(self, args);
-    } else if (g_strcmp0(method, "runJavaScript") == 0) {
-        response = HandleRunJavaScript(self, args);
     } else if (g_strcmp0(method, "destroy") == 0) {
         response = HandleDestroy(self, args);
     } else {

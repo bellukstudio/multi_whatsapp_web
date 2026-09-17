@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:multi_whatsapp_web/data/datasources/webview/mobile/slot_embed_webview_session_handle.dart';
 import 'package:multi_whatsapp_web/domain/repositories/webview_adapter.dart';
 
@@ -289,6 +290,14 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
   Rect? _lastSyncedRect;
   static const double _epsilon = 0.5;
 
+  // --- Drag & drop (lihat LinuxWebKitPlatformView / OnDragMotion di
+  // webkit_multi_view_plugin.cc untuk kenapa ini datang dari native, bukan
+  // dari DropTarget Flutter biasa seperti di Windows). ---
+  bool _dragging = false;
+  StreamSubscription<String>? _dragEnteredSub;
+  StreamSubscription<String>? _dragExitedSub;
+  StreamSubscription<LinuxFileDropEvent>? _dropSub;
+
   @override
   void initState() {
     super.initState();
@@ -302,6 +311,23 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
       (_) => _syncGeometry(),
     );
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
+
+    _dragEnteredSub = LinuxWebKitPlatformView.onDragEntered.listen((viewId) {
+      if (viewId == widget.handle.accountId && mounted && !_dragging) {
+        setState(() => _dragging = true);
+      }
+    });
+    _dragExitedSub = LinuxWebKitPlatformView.onDragExited.listen((viewId) {
+      if (viewId == widget.handle.accountId && mounted && _dragging) {
+        setState(() => _dragging = false);
+      }
+    });
+    _dropSub = LinuxWebKitPlatformView.onFilesDropped.listen((event) {
+      if (event.viewId == widget.handle.accountId) {
+        if (mounted) setState(() => _dragging = false);
+        unawaited(_handleDrop(event.paths));
+      }
+    });
   }
 
   @override
@@ -388,6 +414,9 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
   @override
   void dispose() {
     _geometryTimer?.cancel();
+    _dragEnteredSub?.cancel();
+    _dragExitedSub?.cancel();
+    _dropSub?.cancel();
     if (_subscribedRoute != null) {
       desktopWebViewRouteObserver.unsubscribe(this);
     }
@@ -400,13 +429,143 @@ class _LinuxEngineSurfaceState extends State<_LinuxEngineSurface>
 
   @override
   Widget build(BuildContext context) {
-    return NotificationListener<SizeChangedLayoutNotification>(
-      onNotification: (_) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
-        return true;
-      },
-      child: SizeChangedLayoutNotifier(child: SizedBox.expand(key: _boxKey)),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        NotificationListener<SizeChangedLayoutNotification>(
+          onNotification: (_) {
+            WidgetsBinding.instance.addPostFrameCallback((_) => _syncGeometry());
+            return true;
+          },
+          child: SizeChangedLayoutNotifier(child: SizedBox.expand(key: _boxKey)),
+        ),
+        // IgnorePointer: WebKitWebView native ada di layer TERPISAH di atas
+        // Flutter (lihat komentar di webkit_multi_view_plugin.cc), jadi
+        // overlay ini murni visual — tidak pernah benar-benar menangkap
+        // event mouse/drag, dan memang tidak perlu.
+        if (_dragging)
+          IgnorePointer(
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.25),
+              alignment: Alignment.center,
+              child: const Card(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  child: Text('Lepas untuk mengirim file'),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
+  }
+
+  Future<void> _handleDrop(List<String> paths) async {
+    if (paths.isEmpty) return;
+    final viewId = widget.handle.accountId;
+
+    final payloads = <DroppedFilePayload>[];
+    for (final path in paths) {
+      final file = File(path);
+      if (!await file.exists()) continue;
+      final bytes = await file.readAsBytes();
+      final name = p.basename(path);
+      payloads.add(
+        DroppedFilePayload(
+          name: name,
+          mimeType: guessMimeType(name),
+          bytesBase64: base64Encode(bytes),
+        ),
+      );
+    }
+    if (payloads.isEmpty || !mounted) return;
+
+    final allImages = payloads.every(
+      (payload) =>
+          payload.mimeType.startsWith('image/') ||
+          payload.mimeType.startsWith('video/'),
+    );
+
+    int? targetInputIndex;
+
+    if (!allImages) {
+      final openResult = await LinuxWebKitPlatformView.runJavaScript(
+        viewId: viewId,
+        script: buildOpenAttachMenuScript(),
+      );
+      debugPrint('[file-drop][linux] open-attach-menu: $openResult');
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      final clickResult = await LinuxWebKitPlatformView.runJavaScript(
+        viewId: viewId,
+        script: buildClickDocumentMenuItemScript(),
+      );
+      debugPrint('[file-drop][linux] click-document-item: $clickResult');
+
+      final clickOk = (clickResult is Map && clickResult['ok'] == true);
+      if (!clickOk) {
+        debugPrint('[file-drop][linux] ABORT: gagal klik item Document');
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      int? found;
+      for (var attempt = 0; attempt < 10; attempt++) {
+        final findResult = await LinuxWebKitPlatformView.runJavaScript(
+          viewId: viewId,
+          script: buildFindDocumentInputScript(),
+        );
+        debugPrint('[file-drop][linux] find-doc-input attempt $attempt: $findResult');
+        if (findResult is Map) {
+          final docIndex = findResult['docIndex'];
+          if (docIndex is int && docIndex != -1) {
+            found = docIndex;
+            break;
+          }
+        }
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
+
+      if (found == null) {
+        debugPrint(
+          '[file-drop][linux] ABORT: input accept="*" tidak ditemukan setelah klik Document',
+        );
+        return;
+      }
+      targetInputIndex = found;
+    }
+
+    final initResult = await LinuxWebKitPlatformView.runJavaScript(
+      viewId: viewId,
+      script: buildChunkedTransferInitScript(payloads),
+    );
+    debugPrint('[file-drop][linux] chunk-init: $initResult');
+
+    for (var i = 0; i < payloads.length; i++) {
+      final b64 = payloads[i].bytesBase64;
+      var offset = 0;
+      var chunkCount = 0;
+      while (offset < b64.length) {
+        final end = (offset + fileChunkBase64Size < b64.length)
+            ? offset + fileChunkBase64Size
+            : b64.length;
+        await LinuxWebKitPlatformView.runJavaScript(
+          viewId: viewId,
+          script: buildChunkedTransferAppendScript(i, b64.substring(offset, end)),
+        );
+        offset = end;
+        chunkCount++;
+      }
+      debugPrint(
+        '[file-drop][linux] chunk-append: file $i (${payloads[i].name}) sent in $chunkCount chunk(s)',
+      );
+    }
+
+    final inputResult = await LinuxWebKitPlatformView.runJavaScript(
+      viewId: viewId,
+      script: buildChunkedTransferFinishScript(targetInputIndex: targetInputIndex),
+    );
+    debugPrint('[file-drop][linux] input-populate: $inputResult');
   }
 }
 
