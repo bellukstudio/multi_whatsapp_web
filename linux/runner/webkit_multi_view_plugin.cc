@@ -914,6 +914,52 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
 
     webkit_memory_pressure_settings_free(mem_settings);
 
+    // DIAGNOSTIK (kill jauh lebih sering khusus di build AppImage,
+    // dibanding jalan langsung dari hasil build biasa): AppImage membundel
+    // libwebkit2gtk-nya SENDIRI, yang bisa jadi versi BERBEDA (seringnya
+    // lebih lama) dari webkit2gtk SISTEM yang dipakai saat develop/test
+    // langsung. Construct-property "memory-pressure-settings" di atas cuma
+    // tersedia mulai versi webkit2gtk tertentu -- kalau versi yang
+    // dibundel AppImage-nya lebih lama dan tidak mengenal property ini,
+    // g_object_new() TIDAK ERROR SAMA SEKALI: GLib cuma mencetak WARNING
+    // "... has no property named 'memory-pressure-settings'" ke stderr
+    // (yang TIDAK TERLIHAT kalau AppImage dijalankan lewat klik ganda,
+    // hanya kelihatan kalau dijalankan dari terminal) dan DIAM-DIAM
+    // mengabaikan seluruh setting-nya. Efeknya: WEB_PROCESS_MEMORY_LIMIT_MB
+    // yang sudah kita atur susah payah TIDAK PERNAH benar-benar berlaku di
+    // build AppImage, dan WebKit jatuh ke perilaku default internalnya
+    // sendiri (yang bisa jauh lebih agresif / tidak terduga pada beban
+    // sistem yang sama) -- inilah kenapa gejalanya bisa jauh lebih parah
+    // khusus di AppImage walau kode & konstanta-nya identik.
+    //
+    // Baca-balik property-nya di sini supaya ketidakcocokan ini KETAHUAN
+    // lewat log (cek dengan `stdbuf -oL ./NamaApp.AppImage 2>&1 | grep -i
+    // webkit`), bukan diam-diam gagal tanpa jejak.
+    static bool logged_webkit_version = false;
+    if (!logged_webkit_version) {
+        logged_webkit_version = true;
+        g_message(
+            "[webkit_multi_view] webkit2gtk RUNTIME version terpakai: %u.%u.%u "
+            "(bandingkan dengan versi di mesin build/dev Anda -- kalau beda, "
+            "AppImage kemungkinan membundel versi yang lebih lama)",
+            webkit_get_major_version(), webkit_get_minor_version(),
+            webkit_get_micro_version());
+    }
+    WebKitMemoryPressureSettings* verify_settings = nullptr;
+    g_object_get(web_context, "memory-pressure-settings", &verify_settings, nullptr);
+    if (verify_settings == nullptr) {
+        g_warning(
+            "[webkit_multi_view] view '%s': property 'memory-pressure-"
+            "settings' TIDAK TERPASANG di WebKitWebContext ini -- batas RAM "
+            "per akun (WEB_PROCESS_MEMORY_LIMIT_MB) TIDAK AKTIF untuk view "
+            "ini. Kemungkinan besar webkit2gtk yang dipakai (terutama kalau "
+            "ini build AppImage) versinya tidak mendukung construct-property "
+            "ini.",
+            view_id.c_str());
+    } else {
+        webkit_memory_pressure_settings_free(verify_settings);
+    }
+
     // DOCUMENT_VIEWER paling hemat: tidak menyimpan riwayat back/forward di RAM.
     webkit_web_context_set_cache_model(web_context, WEBKIT_CACHE_MODEL_DOCUMENT_VIEWER);
 
