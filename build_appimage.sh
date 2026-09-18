@@ -147,6 +147,18 @@ fi
 # ${HERE}/usr/share makes the bundled icon (and the gtk-update-icon-cache
 # index built for it above) discoverable.
 #
+# GST_PLUGIN_SYSTEM_PATH_1_0 / GST_PLUGIN_PATH_1_0: same class of problem
+# as GIO_EXTRA_MODULES below (libgiognutls.so) — GStreamer discovers its
+# element plugins (appsrc, autoaudiosink, the WebRTC codec/RTP plugins
+# used for voice notes & voice/video calls) by SCANNING a plugin
+# directory at runtime, not via link-time dependencies, so linuxdeploy's
+# `ldd`-based scan never bundles them either. Without this, WebKit's
+# GStreamer media backend fails to find them ("GStreamer element appsrc
+# not found. Please install it"), followed by a stream of
+# GLib-GObject-CRITICAL / GStreamer-CRITICAL assertions every time a
+# media pipeline is (re-)attempted — see step 4d below for where these
+# get bundled.
+#
 # GDK_BACKEND=x11: fixes the CI-built AppImage's title bar showing only
 # a close button (missing minimize/maximize) on Wayland sessions (seen
 # on Arch + KDE Plasma/KWin Wayland). GTK3 apps under native Wayland
@@ -163,6 +175,8 @@ cat > "$APPDIR/AppRun" << 'EOF'
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/bin/lib:${LD_LIBRARY_PATH:-}"
 export GIO_EXTRA_MODULES="${HERE}/usr/lib/gio/modules:${GIO_EXTRA_MODULES:-}"
+export GST_PLUGIN_SYSTEM_PATH_1_0="${HERE}/usr/lib/gstreamer-1.0:${GST_PLUGIN_SYSTEM_PATH_1_0:-}"
+export GST_PLUGIN_PATH_1_0="${HERE}/usr/lib/gstreamer-1.0:${GST_PLUGIN_PATH_1_0:-}"
 export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export GDK_BACKEND=x11
 cd "${HERE}/usr" || exit 1
@@ -277,6 +291,36 @@ else
   echo "WARNING: libgiognutls.so not found on this build machine."
   echo "Install glib-networking (apt: gir1.2-glib-2.0 / glib-networking)"
   echo "or HTTPS pages inside the webview will fail to load."
+fi
+
+# FIX (log: "GStreamer element appsrc not found. Please install it" /
+# "GStreamer element autoaudiosink not found. Please install it", followed
+# by a burst of GLib-GObject-CRITICAL / GStreamer-CRITICAL assertion
+# failures from WebKitWebProcess every ~13s while a media pipeline is
+# active — voice notes, voice/video calls): same root cause, same fix
+# shape, as the WebKit helper-process and GIO TLS module cases above.
+# GStreamer discovers its element plugins by SCANNING a plugin directory
+# at RUNTIME (registry scan), not via link-time `ldd` dependencies, so
+# linuxdeploy never bundles them. Bundle the whole system GStreamer
+# plugin directory (rather than a curated subset — WebRTC's actual
+# dependency set for voice/video calls is wide: RTP, DTLS/SRTP, jitter
+# buffer, echo cancellation, audio/video codecs, etc., and guessing a
+# subset risks silently breaking call quality even after this fixes the
+# crash/leak pattern) and point GST_PLUGIN_SYSTEM_PATH_1_0 at it in
+# AppRun above.
+echo "==> 4d. Bundling GStreamer plugins"
+GST_PLUGINDIR="$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || true)"
+if [ -n "$GST_PLUGINDIR" ] && [ -d "$GST_PLUGINDIR" ]; then
+  echo "Found: $GST_PLUGINDIR"
+  mkdir -p "$APPDIR/usr/lib/gstreamer-1.0"
+  cp -r "$GST_PLUGINDIR"/* "$APPDIR/usr/lib/gstreamer-1.0/"
+  echo "Bundled $(find "$APPDIR/usr/lib/gstreamer-1.0" -name '*.so' | wc -l) GStreamer plugin(s)."
+else
+  echo "WARNING: gstreamer-1.0 plugin directory not found via pkg-config"
+  echo "on this build machine. Install gstreamer1.0-plugins-base /"
+  echo "-good / -bad / -libav (apt) or the matching packages for your"
+  echo "distro, or voice notes / voice-video calls will be broken (and"
+  echo "may leak memory on every failed attempt) in the built AppImage."
 fi
 
 echo "==> 5. Packaging AppImage"
