@@ -914,50 +914,34 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
 
     webkit_memory_pressure_settings_free(mem_settings);
 
-    // DIAGNOSTIK (kill jauh lebih sering khusus di build AppImage,
-    // dibanding jalan langsung dari hasil build biasa): AppImage membundel
-    // libwebkit2gtk-nya SENDIRI, yang bisa jadi versi BERBEDA (seringnya
-    // lebih lama) dari webkit2gtk SISTEM yang dipakai saat develop/test
-    // langsung. Construct-property "memory-pressure-settings" di atas cuma
-    // tersedia mulai versi webkit2gtk tertentu -- kalau versi yang
-    // dibundel AppImage-nya lebih lama dan tidak mengenal property ini,
-    // g_object_new() TIDAK ERROR SAMA SEKALI: GLib cuma mencetak WARNING
-    // "... has no property named 'memory-pressure-settings'" ke stderr
-    // (yang TIDAK TERLIHAT kalau AppImage dijalankan lewat klik ganda,
-    // hanya kelihatan kalau dijalankan dari terminal) dan DIAM-DIAM
-    // mengabaikan seluruh setting-nya. Efeknya: WEB_PROCESS_MEMORY_LIMIT_MB
-    // yang sudah kita atur susah payah TIDAK PERNAH benar-benar berlaku di
-    // build AppImage, dan WebKit jatuh ke perilaku default internalnya
-    // sendiri (yang bisa jauh lebih agresif / tidak terduga pada beban
-    // sistem yang sama) -- inilah kenapa gejalanya bisa jauh lebih parah
-    // khusus di AppImage walau kode & konstanta-nya identik.
+    // DIAGNOSTIK: versi RUNTIME webkit2gtk yang benar-benar dimuat (beda
+    // dari versi saat compile) -- berguna untuk membandingkan build
+    // AppImage vs build langsung kalau ada gejala yang beda antara
+    // keduanya.
     //
-    // Baca-balik property-nya di sini supaya ketidakcocokan ini KETAHUAN
-    // lewat log (cek dengan `stdbuf -oL ./NamaApp.AppImage 2>&1 | grep -i
-    // webkit`), bukan diam-diam gagal tanpa jejak.
+    // KOREKSI (log sebelumnya menunjukkan "property 'memory-pressure-
+    // settings' of object class 'WebKitWebContext' is not readable" dan
+    // warning "TIDAK TERPASANG" yang tadinya dicetak di sini): dugaan
+    // awal SALAH. Kode sebelumnya membaca balik property ini lewat
+    // g_object_get() untuk memverifikasi apakah tersimpan -- ternyata
+    // "memory-pressure-settings" pada webkit2gtk versi ini memang
+    // WRITE-ONLY (bisa di-set construct-time lewat g_object_new, tapi
+    // sengaja TIDAK didesain untuk dibaca balik lewat g_object_get).
+    // "Tidak bisa dibaca" BUKAN berarti "tidak tersimpan" -- kalau
+    // property-nya benar-benar tidak dikenali WebKitWebContext, GLib akan
+    // mencetak warning "has no property named 'memory-pressure-settings'"
+    // saat g_object_new() di atas dipanggil, BUKAN "is not readable" saat
+    // dibaca balik. Karena warning "has no property named" itu TIDAK
+    // pernah muncul, pengaturan batas RAM di atas kemungkinan besar SUDAH
+    // benar terpasang sejak awal -- verifikasi lewat baca-balik di sini
+    // dihapus karena memang tidak bisa diandalkan untuk property ini.
     static bool logged_webkit_version = false;
     if (!logged_webkit_version) {
         logged_webkit_version = true;
         g_message(
-            "[webkit_multi_view] webkit2gtk RUNTIME version terpakai: %u.%u.%u "
-            "(bandingkan dengan versi di mesin build/dev Anda -- kalau beda, "
-            "AppImage kemungkinan membundel versi yang lebih lama)",
+            "[webkit_multi_view] webkit2gtk RUNTIME version terpakai: %u.%u.%u",
             webkit_get_major_version(), webkit_get_minor_version(),
             webkit_get_micro_version());
-    }
-    WebKitMemoryPressureSettings* verify_settings = nullptr;
-    g_object_get(web_context, "memory-pressure-settings", &verify_settings, nullptr);
-    if (verify_settings == nullptr) {
-        g_warning(
-            "[webkit_multi_view] view '%s': property 'memory-pressure-"
-            "settings' TIDAK TERPASANG di WebKitWebContext ini -- batas RAM "
-            "per akun (WEB_PROCESS_MEMORY_LIMIT_MB) TIDAK AKTIF untuk view "
-            "ini. Kemungkinan besar webkit2gtk yang dipakai (terutama kalau "
-            "ini build AppImage) versinya tidak mendukung construct-property "
-            "ini.",
-            view_id.c_str());
-    } else {
-        webkit_memory_pressure_settings_free(verify_settings);
     }
 
     // DOCUMENT_VIEWER paling hemat: tidak menyimpan riwayat back/forward di RAM.
