@@ -80,7 +80,18 @@
 // tangkap, dan WebKit sendiri yang membunuhnya duluan. Diturunkan ke
 // 780MB supaya marginnya ke hard-kill (900MB) jadi 120MB — jauh lebih
 // longgar untuk poll 5 detik di atas menangkapnya lebih dulu.
-#define MEMORY_RELOAD_THRESHOLD_BYTES (780LL * 1024 * 1024)
+//
+// FIX LAGI (kill "(931 MB)" lalu "(966 MB)" masih terjadi walau margin
+// sudah 120MB & poll 5 detik): ternyata bukan lagi soal margin/kecepatan
+// watchdog — ini lonjakan RSS yang genuinely cepat & besar (lihat
+// penjelasan panjang di WEB_PROCESS_MEMORY_LIMIT_MB di atas, yang
+// dinaikkan ke 1100MB). Ambang proaktif ini ikut disesuaikan supaya tetap
+// proporsional: dulu ~87% dari limit lama (780/900), sekarang dipasang di
+// 900MB, yaitu ~82% dari limit baru (1100MB) — sedikit lebih longgar
+// secara relatif, memberi lebih banyak ruang bagi lonjakan sesaat untuk
+// turun sendiri sebelum kita ikut campur, sekaligus masih menyisakan
+// 200MB margin ke hard-kill WebKit untuk kasus yang benar-benar leak.
+#define MEMORY_RELOAD_THRESHOLD_BYTES (900LL * 1024 * 1024)
 
 // Jangan recycle akun yang sama dua kali dalam jendela waktu ini, supaya
 // tidak terjadi recycle berulang selagi proses lama masih benar-benar
@@ -149,11 +160,33 @@
 // banyak media, panggilan suara/video) — tapi jaga tetap di ATAS pemakaian
 // normal WhatsApp Web (500-800MB), jangan dipasang pas-pasan dengannya
 // seperti sebelumnya.
-#define WEB_PROCESS_MEMORY_LIMIT_MB 900
-#define WEB_PROCESS_CONSERVATIVE_THRESHOLD 0.45  // mulai buang cache non-kritis lebih awal (~400MB)
-#define WEB_PROCESS_STRICT_THRESHOLD 0.70         // mulai buang memori kritis (~630MB)
-#define WEB_PROCESS_KILL_THRESHOLD 1.0            // >= 900MB -> proses dibunuh & di-respawn (backstop, bukan ambang normal)
-#define WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS 10.0 // WebKit cek RSS internal tiap 10 detik
+//
+// FIX (kill "(931 MB)" lalu "(966 MB)" masih terjadi walau bug pelacakan
+// PID sudah diperbaiki, ambang proaktif sudah 780MB, watchdog sudah poll
+// tiap 5 detik): dua kejadian ini BUKAN lagi kasus watchdog salah/tidak
+// memantau — ini genuinely LONJAKAN RSS yang cepat & besar (media berat
+// dibuka sekaligus, panggilan suara/video, dsb). WebKit sendiri baru cek
+// RSS internalnya tiap WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS = 10
+// detik — kalau dalam jendela 10 detik itu RSS melonjak lebih dari
+// beberapa puluh MB (966MB berarti sudah 66MB DI ATAS limit saat baru
+// sempat dicek), tidak ada watchdog dari luar (secepat apa pun) yang bisa
+// menjamin selalu menangkapnya SEBELUM WebKit sendiri — satu-satunya
+// jaminan sungguhan adalah punya cukup RUANG (headroom) di atas pemakaian
+// normal untuk menyerap lonjakan sesaat itu tanpa langsung kena kill,
+// supaya dia sempat turun lagi sendiri (WhatsApp Web biasanya melepas
+// blob media setelah viewer ditutup) alih-alih dipotong di tengah jalan.
+//
+// Dinaikkan dari 900MB -> 1100MB (bukan 1.4GB seperti dikira sebelumnya —
+// itu jauh lebih besar dari yang dibutuhkan berdasarkan bukti di lapangan:
+// dua kill terakhir di 931MB & 966MB, jadi headroom sekitar 200-250MB di
+// atas kejadian nyata sudah cukup longgar) dan poll internal WebKit
+// dipercepat 10 -> 5 detik supaya jendela "buta" WebKit sendiri (sumber
+// overshoot di atas) ikut menyempit, bukan cuma sisi watchdog kita.
+#define WEB_PROCESS_MEMORY_LIMIT_MB 1100
+#define WEB_PROCESS_CONSERVATIVE_THRESHOLD 0.40  // mulai buang cache non-kritis lebih awal (~440MB)
+#define WEB_PROCESS_STRICT_THRESHOLD 0.65         // mulai buang memori kritis (~715MB)
+#define WEB_PROCESS_KILL_THRESHOLD 1.0            // >= 1100MB -> proses dibunuh & di-respawn (backstop, bukan ambang normal)
+#define WEB_PROCESS_MEMORY_POLL_INTERVAL_SECONDS 5.0 // WebKit cek RSS internal tiap 5 detik (sebelumnya 10)
 
 // --- Backoff untuk reload setelah WebProcess dibunuh WebKit sendiri ---
 // FIX (bagian kedua dari death-spiral di atas): OnWebProcessTerminated
@@ -196,6 +229,20 @@ struct ViewGeometry {
     int consecutive_kills = 0;         // di-reset kalau sudah tenang > KILL_BACKOFF_RESET_WINDOW
     gint64 last_kill_unix = 0;         // waktu (detik) kill terakhir, dasar perhitungan reset window
     guint pending_reload_timeout_id = 0; // id g_timeout_add untuk reload yang ditunda, 0 = tidak ada
+
+    // FIX (kill WebKit masih muncul tepat saat akun LAIN dibuat, walau
+    // threshold/poll watchdog sudah dikencangkan — lihat FindUnclaimedWeb
+    // ProcessPid & SnapshotWebProcessPids): PID-PID "WebKitWebProce" yang
+    // SUDAH ADA di /proc sesaat SEBELUM kita memicu load_uri yang
+    // menyebabkan proses baru untuk VIEW INI spawn. Dipakai supaya resolve
+    // PID untuk view ini tidak pernah ikut mengklaim proses milik view lain
+    // yang kebetulan juga sedang menunggu resolve di waktu yang berdekatan
+    // (mis. saat user membuat akun baru sementara akun lain masih dalam
+    // proses respawn) — tanpa ini, heuristik lama ("PID unclaimed terbesar")
+    // bisa salah tebak, dan akibatnya akun yang SALAH assign PID-nya jadi
+    // TIDAK PERNAH dipantau watchdog RSS sama sekali (celah yang persis
+    // cocok dengan gejala "kill terjadi tepat saat sesi baru dibuat").
+    std::set<pid_t> pid_resolve_baseline;
 };
 
 struct _WebkitMultiViewPlugin {
@@ -282,13 +329,62 @@ namespace {
         return rss_kb;
     }
 
+    // Ambil snapshot SEMUA PID "WebKitWebProce" yang jadi anak proses kita
+    // saat ini (diklaim ataupun belum). Dipanggil TEPAT SEBELUM kita memicu
+    // load_uri yang akan menyebabkan sebuah proses BARU spawn, supaya
+    // resolve PID untuk proses baru itu nanti bisa membedakan "sudah ada
+    // dari tadi" (punya view lain / sisa proses lama) vs "benar-benar baru
+    // muncul setelah ini" — lihat pid_resolve_baseline di ViewGeometry.
+    std::set<pid_t> SnapshotWebProcessPids() {
+        pid_t my_pid = getpid();
+        std::set<pid_t> result;
+        DIR* proc = opendir("/proc");
+        if (!proc) return result;
+        struct dirent* entry;
+        while ((entry = readdir(proc)) != nullptr) {
+            if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
+            pid_t pid = static_cast<pid_t>(atoi(entry->d_name));
+            if (pid <= 0) continue;
+            std::string name;
+            pid_t ppid = 0;
+            if (!ReadProcStatus(pid, &name, &ppid)) continue;
+            if (ppid != my_pid) continue;
+            if (name.rfind("WebKitWebProce", 0) == 0) result.insert(pid);
+        }
+        closedir(proc);
+        return result;
+    }
+
     // Cari PID WebKitWebProcess baru yang anak dari proses kita sendiri dan
     // belum "diklaim" view lain. Dipanggil sesaat setelah create/load_uri,
     // saat WebProcess untuk view tersebut baru saja spawn. WebKitGTK tidak
     // punya API publik untuk memetakan WebView -> pid secara langsung, jadi
-    // ini heuristik "yang terbaru & belum diklaim" — cukup andal selama
-    // pembuatan akun tidak terjadi race dalam hitungan milidetik yang sama.
-    pid_t FindUnclaimedWebProcessPid(std::set<pid_t>* assigned_pids) {
+    // ini heuristik — cukup andal SELAMA kandidatnya benar-benar dibatasi ke
+    // proses yang baru muncul.
+    //
+    // FIX (kill WebKit "(903 MB) ... Killed" masih terjadi tepat saat akun
+    // LAIN dibuat, walau threshold & interval watchdog sudah dikencangkan):
+    // versi sebelumnya memilih PID TERBESAR di antara SEMUA yang belum
+    // diklaim, tanpa peduli sudah berapa lama proses itu berjalan. Kalau
+    // dua view sedang menunggu resolve PID di waktu yang berdekatan (mis.
+    // view A baru saja direspawn oleh OnWebProcessTerminated, dan tepat
+    // saat itu user membuat view B), resolve untuk B bisa saja berjalan
+    // duluan dan salah mengklaim proses A (yang kebetulan PID-nya lebih
+    // besar dari proses B yang belum sempat spawn) — akibatnya A TIDAK
+    // PERNAH mendapat PID yang benar, dan watchdog RSS tidak pernah
+    // memeriksanya sampai WebKit sendiri yang membunuhnya.
+    //
+    // `exclude_baseline` (lihat SnapshotWebProcessPids, diambil tepat
+    // sebelum load_uir dipicu) berisi semua PID yang SUDAH ADA sebelum
+    // proses baru untuk view ini mulai spawn — PID mana pun di dalam set
+    // ini otomatis bukan kandidat (dia milik view lain, atau sisa proses
+    // lama). Di antara sisanya (yang benar-benar baru), pilih yang PALING
+    // KECIL — PID pada Linux dialokasikan naik secara umum, jadi yang
+    // paling kecil di antara kandidat baru adalah yang paling dulu spawn,
+    // konsisten dengan urutan permintaan resolve yang juga FIFO (dipicu
+    // berurutan lewat g_timeout_add).
+    pid_t FindUnclaimedWebProcessPid(std::set<pid_t>* assigned_pids,
+                                      const std::set<pid_t>& exclude_baseline) {
         pid_t my_pid = getpid();
         DIR* proc = opendir("/proc");
         if (!proc) return 0;
@@ -297,14 +393,14 @@ namespace {
         while ((entry = readdir(proc)) != nullptr) {
             if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
             pid_t pid = static_cast<pid_t>(atoi(entry->d_name));
-            if (pid <= 0 || assigned_pids->count(pid)) continue;
+            if (pid <= 0 || assigned_pids->count(pid) || exclude_baseline.count(pid)) continue;
             std::string name;
             pid_t ppid = 0;
             if (!ReadProcStatus(pid, &name, &ppid)) continue;
             if (ppid != my_pid) continue;
             // Nama proses di /proc dipotong ~15 char: "WebKitWebProce".
             if (name.rfind("WebKitWebProce", 0) == 0) {
-                if (pid > best) best = pid; // ambil yang PID-nya terbesar (paling baru)
+                if (best == 0 || pid < best) best = pid; // ambil yang PID-nya PALING KECIL (paling dulu muncul)
             }
         }
         closedir(proc);
@@ -550,10 +646,16 @@ namespace {
                 }
             }
             // PID lama sudah tidak valid, watchdog /proc perlu mencari ulang.
+            // Snapshot baseline di SINI (sebelum load_uri manapun di atas
+            // benar-benar memicu proses baru spawn — baik yang instan
+            // maupun yang masih menunggu backoff/suspend) supaya resolve
+            // untuk view ini nanti tidak salah mengklaim proses view lain
+            // yang kebetulan sedang berjalan (lihat pid_resolve_baseline).
             if (geo.web_process_pid > 0) {
                 self->assigned_pids->erase(geo.web_process_pid);
                 geo.web_process_pid = 0;
             }
+            geo.pid_resolve_baseline = SnapshotWebProcessPids();
             PendingPidResolve* pending = new PendingPidResolve{self, data->view_id, 10};
             g_timeout_add(300, ResolvePidCallback, pending);
             return;
@@ -611,6 +713,9 @@ namespace {
                 self->assigned_pids->erase(geo.web_process_pid);
                 geo.web_process_pid = 0;
             }
+            // Sama seperti blok EXCEEDED_MEMORY_LIMIT/CRASHED di atas — lihat
+            // komentar di sana.
+            geo.pid_resolve_baseline = SnapshotWebProcessPids();
             PendingPidResolve* pending = new PendingPidResolve{self, data->view_id, 10};
             g_timeout_add(300, ResolvePidCallback, pending);
         }
@@ -624,7 +729,7 @@ namespace {
             delete pending;
             return G_SOURCE_REMOVE;
         }
-        pid_t pid = FindUnclaimedWebProcessPid(self->assigned_pids);
+        pid_t pid = FindUnclaimedWebProcessPid(self->assigned_pids, git->second.pid_resolve_baseline);
         if (pid > 0) {
             git->second.web_process_pid = pid;
             self->assigned_pids->insert(pid);
@@ -690,7 +795,7 @@ namespace {
             // healing" — selama view-nya masih hidup, cepat atau lambat
             // akan tertangkap di sini walau rantai awalnya gagal.
             if (geo.web_process_pid <= 0) {
-                pid_t pid = FindUnclaimedWebProcessPid(self->assigned_pids);
+                pid_t pid = FindUnclaimedWebProcessPid(self->assigned_pids, geo.pid_resolve_baseline);
                 if (pid > 0) {
                     geo.web_process_pid = pid;
                     self->assigned_pids->insert(pid);
@@ -850,6 +955,11 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
 
     gtk_fixed_put(self->container, webview_widget, 0, 0);
     gtk_widget_show(webview_widget);
+    // Snapshot baseline SEBELUM load_uri memicu WebProcess baru spawn (lihat
+    // pid_resolve_baseline di ViewGeometry & FindUnclaimedWebProcessPid) —
+    // supaya resolve PID untuk view ini nanti tidak salah mengklaim proses
+    // milik view lain yang kebetulan sedang berjalan/direspawn bersamaan.
+    std::set<pid_t> pid_resolve_baseline = SnapshotWebProcessPids();
     webkit_web_view_load_uri(webview, url.c_str());
 
     // Tangkap sinyal saat WebKit membunuh WebProcess ini (baik karena lewat
@@ -889,6 +999,7 @@ static FlMethodResponse* HandleCreate(WebkitMultiViewPlugin* self, FlValue* args
     (*self->views)[view_id] = webview;
     ViewGeometry geo{};
     geo.url = url;
+    geo.pid_resolve_baseline = pid_resolve_baseline;
     (*self->geometry)[view_id] = geo;
 
     // Coba temukan PID WebProcess-nya sesaat setelah spawn, supaya watchdog
